@@ -1848,8 +1848,7 @@ function TabConteudo({ toast }) {
 
   // ── SOBRE state
   const [siteText, setSiteText] = useState({});
-  const [stLoading, setStLoading] = useState(true);
-  useEffect(() => { DB.getSiteText().then(t => { setSiteText(t); setStLoading(false); }); }, []);
+  useEffect(() => { DB.getSiteText().then(t => { setSiteText(t); }); }, []);
   const saveSiteText = async () => {
     await DB.saveSiteText(siteText);
     toast("✅ Conteúdo salvo!", "success");
