@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -14,19 +13,34 @@ const firebaseConfig = {
 };
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
-const storage = getStorage(fbApp);
 
-// ── Upload seguro para Firebase Storage (documentos privados)
-const uploadDocumento = (userId, tipo, file, onProgress) => new Promise((resolve, reject) => {
-  const path = `documentos/${userId}/${tipo}_${Date.now()}.${file.name.split(".").pop()}`;
-  const sRef = storageRef(storage, path);
-  const task = uploadBytesResumable(sRef, file);
-  task.on("state_changed",
-    snap => onProgress && onProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)),
-    reject,
-    async () => { const url = await getDownloadURL(task.snapshot.ref); resolve({ url, path }); }
-  );
-});
+// ── Upload de documentos via Cloudinary (pasta privada por userId)
+const uploadDocumento = async (userId, tipo, file, onProgress) => {
+  // Lê config do Firestore (settings/site)
+  const siteDoc = await getDoc(doc(db, "settings", "site"));
+  const site = siteDoc.exists() ? siteDoc.data() : {};
+  const cloud = site.cloudinaryCloud;
+  const preset = site.cloudinaryPreset;
+  if (!cloud || !preset) throw new Error("Configure o Cloudinary no painel Admin → ⚙️ Configurações antes de enviar documentos.");
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", preset);
+    // Pasta por userId para organização — ex: documentos/U1234567/rg
+    fd.append("folder", `documentos/${userId}`);
+    fd.append("public_id", `${tipo}_${Date.now()}`);
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = e => onProgress && onProgress(Math.round(e.loaded/e.total*100));
+    xhr.onload = () => {
+      const res = JSON.parse(xhr.responseText);
+      if (res.secure_url) resolve({ url: res.secure_url, publicId: res.public_id });
+      else reject(new Error(res.error?.message || "Erro no upload"));
+    };
+    xhr.onerror = () => reject(new Error("Falha de conexão"));
+    xhr.open("POST", `https://api.cloudinary.com/v1_1/${cloud}/auto/upload`);
+    xhr.send(fd);
+  });
+};
 
 // ─── DB HELPERS ──────────────────────────────────────────────────────────────
 const DB = {
@@ -186,13 +200,26 @@ a{color:var(--blue);text-decoration:none}
   .dash-header{padding:20px 16px}
   .sidebar{transform:translateX(-100%);transition:.3s;z-index:200}
   .sidebar.open{transform:translateX(0)}
-  .admin-content{margin-left:0!important;padding:16px}
+  .admin-content{margin-left:0!important;padding:16px;padding-top:120px!important}
   .admin-topbar{display:flex!important}
+  .admin-mobile-tabs{display:flex!important}
+  .admin-desktop-only{display:none!important}
   .tbl{display:block;overflow-x:auto;white-space:nowrap}
   .grid-2{grid-template-columns:1fr}
+
   .pix-key{font-size:13px;letter-spacing:0}
 }
 
+/* ADMIN MOBILE TABS */
+.admin-mobile-tabs{display:none;position:fixed;top:56px;left:0;right:0;z-index:149;
+  background:var(--navy);overflow-x:auto;white-space:nowrap;
+  border-bottom:2px solid rgba(255,255,255,.15);
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.admin-mobile-tabs::-webkit-scrollbar{display:none}
+.admin-mobile-tab{display:inline-block;padding:10px 14px;color:rgba(255,255,255,.7);
+  font-size:12px;font-family:'Nunito',sans-serif;font-weight:700;cursor:pointer;
+  border-bottom:3px solid transparent;transition:.2s;white-space:nowrap}
+.admin-mobile-tab.active{color:#fff;border-bottom-color:var(--gold)}
 /* IMPACT BAR */
 .impact-bar{background:linear-gradient(135deg,var(--gold),var(--gold2));padding:40px 32px}
 .impact-num{font-family:'Barlow Condensed',sans-serif;font-size:48px;font-weight:900;color:var(--navy);line-height:1}
@@ -1065,22 +1092,23 @@ function Register({ go, toast }) {
     const docMeta = {};
 
     try {
-      // Upload each document to Firebase Storage /documentos/{userId}/
+      // Upload cada documento via Cloudinary
       for (const {key} of docTypes) {
         if (!docs[key]) continue;
         toast(`Enviando ${key.toUpperCase()}...`, "info");
         const result = await uploadDocumento(userId, key, docs[key], pct => {
           setProgress(prev => ({...prev, [key]: pct}));
         });
-        // Save only path reference to Firestore — NOT the signed URL for security
+        // Salva URL direta no Firestore (Cloudinary retorna URL permanente)
         await DB.saveUserDoc(userId, {
           tipo: key,
-          path: result.path,
+          url: result.url,
+          publicId: result.publicId,
           nome: docs[key].name,
           tamanho: docs[key].size,
           uploadedAt: new Date().toLocaleString("pt-BR"),
         });
-        docMeta[key] = { path: result.path, nome: docs[key].name };
+        docMeta[key] = { url: result.url, nome: docs[key].name };
       }
 
       // Save user WITHOUT document URLs (only metadata)
@@ -1791,17 +1819,14 @@ function SelUserDocs({ userId, toast }) {
     DB.getUserDocs(userId).then(d => { setDocs(d); setLoading(false); });
   }, [userId]);
 
-  const openDoc = async (path) => {
-    try {
-      const url = await getDownloadURL(storageRef(storage, path));
-      window.open(url, "_blank");
-    } catch { toast("Erro ao abrir documento","error"); }
+  const openDoc = (url) => {
+    if (url) window.open(url, "_blank");
+    else toast("URL do documento não encontrada","error");
   };
 
-  const deleteDoc = async (docId, path) => {
+  const deleteDoc = async (docId) => {
     if (!window.confirm("Remover este documento?")) return;
     try {
-      await deleteObject(storageRef(storage, path));
       await DB.deleteUserDoc(userId, docId);
       setDocs(prev => prev.filter(d => d.id !== docId));
       toast("Documento removido","info");
@@ -1829,9 +1854,9 @@ function SelUserDocs({ userId, toast }) {
               </div>
               <div style={{display:"flex",gap:6}}>
                 <button className="btn btn-blue btn-sm" style={{padding:"4px 12px",fontSize:12}}
-                  onClick={() => openDoc(d.path)}>👁 Ver</button>
+                  onClick={() => openDoc(d.url)}>👁 Ver</button>
                 <button className="btn btn-red btn-sm" style={{padding:"4px 10px",fontSize:12}}
-                  onClick={() => deleteDoc(d.id, d.path)}>🗑</button>
+                  onClick={() => deleteDoc(d.id)}>🗑</button>
               </div>
             </div>
           ))}
@@ -2474,6 +2499,12 @@ function Admin({ go, logout, toast }) {
       </div>
       {/* Sidebar overlay on mobile */}
       {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:190}} />}
+      {/* Mobile horizontal scrollable tabs */}
+      <div className="admin-mobile-tabs">
+        {tabs.map(([id, label]) => (
+          <span key={id} className={`admin-mobile-tab${tab===id?" active":""}`} onClick={() => { setTab(id); setSidebarOpen(false); }}>{label}</span>
+        ))}
+      </div>
       <div className={`sidebar${sidebarOpen?" open":""}`}>
         <div style={{padding:"20px 20px 12px"}}><IMBLogo variant="nav" /></div>
         <div style={{padding:"8px 0"}}>
@@ -2488,7 +2519,7 @@ function Admin({ go, logout, toast }) {
       </div>
 
       <div className="admin-content" style={{paddingTop:"env(safe-area-inset-top)"}}>
-        <style>{`@media(max-width:900px){.admin-content{padding-top:72px!important}}`}</style>
+        <style>{`@media(max-width:900px){.admin-content{padding-top:110px!important}}`}</style>
         {/* ── CADASTROS ── */}
         {tab==="cadastros" && (
           <div className="fade-in">
