@@ -28,9 +28,13 @@ const DB = {
   async saveQrHistory(h) { await addDoc(collection(db,"qr_history"),h); },
   async getDonGoal() { const d = await getDoc(doc(db,"settings","donation_goal")); return d.exists()?d.data():{ current:3200,target:5000,label:"Meta de Natal 2025",currency:"R$" }; },
   async saveDonGoal(g) { await setDoc(doc(db,"settings","donation_goal"),g); },
+  async getCollaborators() { const s = await getDocs(collection(db,"collaborators")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveCollaborator(c) { const {id,...data}=c; await setDoc(doc(db,"collaborators",id),data); },
+  async updateCollaborator(id,data) { await updateDoc(doc(db,"collaborators",id),data); },
   // Realtime listeners
   onUsers(cb) { return onSnapshot(collection(db,"users"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
   onEvents(cb) { return onSnapshot(collection(db,"events"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
+  onCollaborators(cb) { return onSnapshot(collection(db,"collaborators"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
 };
 
 
@@ -1028,9 +1032,18 @@ function Register({ go, toast }) {
 // ─── LOGIN ───────────────────────────────────────────────────────────────────
 function Login({ go, onLogin, toast }) {
   const [email, setEmail] = useState(""); const [pw, setPw] = useState("");
+  const [tab, setTab] = useState("familia"); // "familia" | "colaborador"
   const handleLogin = async () => {
     if (email === "admin@marildabrandao.org.br" && pw === "admin123") {
       onLogin({ name:"Administrador", email, role:"admin" }); go("admin"); return;
+    }
+    if (tab === "colaborador") {
+      const cols = await DB.getCollaborators();
+      const c = cols.find(c => c.email===email && c.password===pw);
+      if (!c) { toast("E-mail ou senha incorretos","error"); return; }
+      if (c.status==="pending") { toast("Cadastro aguardando aprovação do admin","error"); return; }
+      if (c.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+      onLogin({...c, role:"collaborator"}); go("collaborator"); return;
     }
     const users = await DB.getUsers();
     const u = users.find(u => u.email===email && u.password===pw);
@@ -1039,25 +1052,40 @@ function Login({ go, onLogin, toast }) {
     if (u.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
     onLogin(u); go("dashboard");
   };
+  const inp = {background:"rgba(255,255,255,.1)",border:"2px solid rgba(255,255,255,.2)",color:"#fff"};
   return (
     <>
       <style>{CSS}</style>
       <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0a2d6e,#1a5bb8)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
         <div style={{background:"rgba(255,255,255,.06)",backdropFilter:"blur(20px)",borderRadius:24,padding:40,width:"100%",maxWidth:420,border:"1px solid rgba(255,255,255,.15)"}}>
-          <div style={{marginBottom:32,textAlign:"center"}}>
+          <div style={{marginBottom:28,textAlign:"center"}}>
             <IMBLogo variant="hero" />
+          </div>
+          {/* Tab selector */}
+          <div style={{display:"flex",background:"rgba(0,0,0,.2)",borderRadius:12,padding:4,marginBottom:24,gap:4}}>
+            {[["familia","👨‍👩‍👧 Família"],["colaborador","🤝 Colaborador"]].map(([v,l]) => (
+              <button key={v} onClick={() => setTab(v)} style={{flex:1,padding:"8px 0",borderRadius:8,fontWeight:800,fontSize:13,
+                background:tab===v?"rgba(255,255,255,.15)":"transparent",
+                color:tab===v?"#fff":"rgba(255,255,255,.5)",transition:".2s"}}>
+                {l}
+              </button>
+            ))}
           </div>
           <div className="form-group">
             <label className="form-label" style={{color:"rgba(255,255,255,.7)"}}>E-mail</label>
-            <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={{background:"rgba(255,255,255,.1)",border:"2px solid rgba(255,255,255,.2)",color:"#fff"}} placeholder="seu@email.com" />
+            <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inp} placeholder="seu@email.com" />
           </div>
           <div className="form-group">
             <label className="form-label" style={{color:"rgba(255,255,255,.7)"}}>Senha</label>
-            <input className="form-input" type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={{background:"rgba(255,255,255,.1)",border:"2px solid rgba(255,255,255,.2)",color:"#fff"}} placeholder="••••••••" />
+            <input className="form-input" type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inp} placeholder="••••••••" />
           </div>
           <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",marginTop:8,padding:"13px"}} onClick={handleLogin}>Entrar</button>
-          <div style={{textAlign:"center",marginTop:20}}>
-            <button className="nl" onClick={() => go("register")} style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Não tem cadastro? <span style={{color:"var(--gold2)",fontWeight:800}}>Cadastre-se</span></button>
+          <div style={{textAlign:"center",marginTop:16}}>
+            {tab==="familia" ? (
+              <button className="nl" onClick={() => go("register")} style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Não tem cadastro? <span style={{color:"var(--gold2)",fontWeight:800}}>Cadastre-se</span></button>
+            ) : (
+              <button className="nl" onClick={() => go("collabregister")} style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Quer ser colaborador? <span style={{color:"var(--gold2)",fontWeight:800}}>Solicite acesso</span></button>
+            )}
           </div>
           <div style={{textAlign:"center",marginTop:8}}>
             <button className="nl" onClick={() => go("home")} style={{color:"rgba(255,255,255,.4)",fontSize:12}}>← Voltar ao site</button>
@@ -1234,6 +1262,250 @@ function Dashboard({ user, go, logout }) {
   );
 }
 
+// ─── COLLABORATOR REGISTER ───────────────────────────────────────────────────
+function CollaboratorRegister({ go, toast }) {
+  const [f, setF] = useState({ name:"", email:"", phone:"", role:"Validador de QR", password:"", confirm:"" });
+  const set = k => e => setF({...f,[k]:e.target.value});
+  const handleSubmit = async () => {
+    if (!f.name||!f.email||!f.password) { toast("Preencha todos os campos obrigatórios","error"); return; }
+    if (f.password !== f.confirm) { toast("Senhas não conferem","error"); return; }
+    const cols = await DB.getCollaborators();
+    if (cols.find(c => c.email===f.email)) { toast("E-mail já cadastrado","error"); return; }
+    const newCol = { ...f, id:`C${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR") };
+    delete newCol.confirm;
+    await DB.saveCollaborator(newCol);
+    toast("✓ Solicitação enviada! Aguarde aprovação do administrador.","success");
+    setTimeout(() => go("login"), 1800);
+  };
+  return (
+    <>
+      <style>{CSS}</style>
+      <div style={{minHeight:"100vh",background:"var(--bg)",padding:"32px 20px"}}>
+        <div style={{maxWidth:560,margin:"0 auto"}}>
+          <div style={{background:"var(--navy)",borderRadius:"20px 20px 0 0",padding:32,textAlign:"center"}}>
+            <IMBLogo variant="hero" />
+          </div>
+          <div className="card" style={{borderRadius:"0 0 20px 20px",padding:32}}>
+            <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,color:"var(--navy)",marginBottom:4}}>🤝 Cadastro de Colaborador</h2>
+            <p style={{color:"var(--gray)",fontSize:14,marginBottom:24}}>Preencha seus dados para solicitar acesso como colaborador do Instituto</p>
+            <div className="form-group">
+              <label className="form-label">Nome Completo *</label>
+              <input className="form-input" value={f.name} onChange={set("name")} placeholder="Seu nome completo" />
+            </div>
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">E-mail *</label>
+                <input className="form-input" type="email" value={f.email} onChange={set("email")} placeholder="seu@email.com" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Telefone / WhatsApp</label>
+                <input className="form-input" value={f.phone} onChange={set("phone")} placeholder="(00) 00000-0000" />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Função desejada</label>
+              <select className="form-select" value={f.role} onChange={set("role")}>
+                <option>Validador de QR</option>
+                <option>Cadastrador de Famílias</option>
+                <option>Apoio Geral</option>
+              </select>
+            </div>
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">Senha *</label>
+                <input className="form-input" type="password" value={f.password} onChange={set("password")} placeholder="Crie uma senha" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Confirmar Senha *</label>
+                <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} placeholder="Repita a senha" />
+              </div>
+            </div>
+            <div style={{background:"var(--sky)",borderRadius:10,padding:14,marginBottom:20,fontSize:13,color:"var(--navy)"}}>
+              ℹ️ Após o envio, o administrador irá analisar sua solicitação. Você será notificado por e-mail quando aprovado.
+            </div>
+            <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",padding:13}} onClick={handleSubmit}>Enviar Solicitação</button>
+            <div style={{textAlign:"center",marginTop:16}}>
+              <button className="nl" onClick={() => go("login")} style={{color:"var(--gray)",fontSize:13}}>← Voltar ao login</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── COLLABORATOR DASHBOARD ───────────────────────────────────────────────────
+function CollaboratorDashboard({ user, go, logout, toast }) {
+  const [events, setEvents] = useState([]);
+  const [qrInput, setQrInput] = useState("");
+  const [qrResult, setQrResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [scanning, setScanning] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  useEffect(() => {
+    DB.getEvents().then(evs => setEvents(evs));
+    DB.getQrHistory().then(h => setHistory(h));
+  }, []);
+
+  const validateQR = async (code) => {
+    setQrResult(null);
+    if (!code.startsWith("IMB-")) { setQrResult({ ok:false, msg:"QR Code inválido" }); return; }
+    const parts = code.split("-");
+    if (parts.length < 4) { setQrResult({ ok:false, msg:"Formato inválido" }); return; }
+    const eventId = parts[1].toLowerCase();
+    const userId = parts[2];
+    const allUsers = await DB.getUsers();
+    const u = allUsers.find(u => u.id===userId);
+    if (!u) { setQrResult({ ok:false, msg:"Usuário não encontrado" }); return; }
+    if (u.qrCodes?.[eventId] !== code) { setQrResult({ ok:false, msg:"QR Code não corresponde" }); return; }
+    if (u.usedQrCodes?.[eventId]) { setQrResult({ ok:false, msg:`Já utilizado em ${u.usedQrCodes[eventId]}`, user:u }); return; }
+    const ev = events.find(e => e.id===eventId);
+    setQrResult({ ok:true, user:u, event:ev, code, eventId });
+  };
+
+  const confirmDelivery = async () => {
+    if (!qrResult?.ok) return;
+    const ts = new Date().toLocaleString("pt-BR");
+    const newUsedQr = { ...(qrResult.user.usedQrCodes||{}), [qrResult.eventId]: ts };
+    await DB.updateUser(qrResult.user.id, { usedQrCodes: newUsedQr });
+    const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts, validatedBy:user.name };
+    await DB.saveQrHistory(histEntry);
+    setHistory(prev => [...prev, histEntry]);
+    toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
+    setQrResult(null); setQrInput("");
+  };
+
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } });
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      setScanning(true);
+      if (!window.jsQR) {
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+        s.onload = () => scanLoop();
+        document.head.appendChild(s);
+      } else { scanLoop(); }
+    } catch { toast("Câmera não disponível","error"); }
+  };
+
+  const scanLoop = () => {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const tick = () => {
+      if (!videoRef.current || !streamRef.current) return;
+      if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        ctx.drawImage(videoRef.current, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR?.(img.data, img.width, img.height);
+        if (code) { stopCamera(); validateQR(code.data); return; }
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  };
+
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setScanning(false);
+  };
+
+  const myHistory = history.filter(h => h.validatedBy === user.name);
+
+  return (
+    <>
+      <style>{CSS}</style>
+      <div style={{minHeight:"100vh",background:"var(--bg)"}}>
+        {/* Header */}
+        <div style={{background:"linear-gradient(135deg,var(--navy),#1a5bb8)",padding:"24px 32px",color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+          <div>
+            <IMBLogo variant="nav" />
+            <div style={{marginTop:10,fontSize:18,fontWeight:800}}>Olá, {user.name?.split(" ")[0]}! 🤝</div>
+            <div style={{fontSize:13,color:"rgba(255,255,255,.7)"}}>Colaborador · {user.role}</div>
+          </div>
+          <button className="btn btn-out btn-sm" onClick={logout}>Sair</button>
+        </div>
+
+        <div style={{maxWidth:900,margin:"0 auto",padding:"32px 20px"}}>
+          {/* QR Scanner */}
+          <div className="card" style={{padding:32,marginBottom:24}}>
+            <h3 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,color:"var(--navy)",marginBottom:4}}>🔲 Validar QR Code</h3>
+            <p style={{color:"var(--gray)",fontSize:14,marginBottom:24}}>Escaneie ou digite o QR Code para confirmar a entrega</p>
+
+            {/* Camera area */}
+            <div className={`qr-scanner-area${scanning?" active":""}`} style={{marginBottom:20,position:"relative"}}>
+              {scanning ? (
+                <>
+                  <video ref={videoRef} style={{width:"100%",maxHeight:300,borderRadius:10,objectFit:"cover"}} />
+                  <button className="btn btn-red btn-sm" style={{marginTop:12}} onClick={stopCamera}>✕ Fechar câmera</button>
+                </>
+              ) : (
+                <>
+                  <div style={{fontSize:48,marginBottom:12}}>📷</div>
+                  <p style={{color:"var(--gray)",marginBottom:16}}>Use a câmera para escanear automaticamente</p>
+                  <button className="btn btn-blue" onClick={startCamera}>📷 Abrir Câmera</button>
+                </>
+              )}
+            </div>
+
+            {/* Manual input */}
+            <div style={{display:"flex",gap:10}}>
+              <input className="form-input" value={qrInput} onChange={e=>setQrInput(e.target.value)}
+                placeholder="Digite o código IMB-..." style={{flex:1}}
+                onKeyDown={e => e.key==="Enter" && validateQR(qrInput)} />
+              <button className="btn btn-blue" onClick={() => validateQR(qrInput)}>Validar</button>
+            </div>
+
+            {/* Result */}
+            {qrResult && (
+              <div style={{marginTop:20,padding:20,borderRadius:12,background:qrResult.ok?"#dcfce7":"#fee2e2",border:`2px solid ${qrResult.ok?"#22c55e":"#ef4444"}`}}>
+                {qrResult.ok ? (
+                  <>
+                    <div style={{fontSize:18,fontWeight:900,color:"#166534",marginBottom:8}}>✅ QR Code válido!</div>
+                    <div style={{color:"#166534",fontSize:14,marginBottom:4}}><strong>Beneficiário:</strong> {qrResult.user?.name}</div>
+                    <div style={{color:"#166534",fontSize:14,marginBottom:4}}><strong>Evento:</strong> {qrResult.event?.icon} {qrResult.event?.label}</div>
+                    <div style={{color:"#166534",fontSize:14,marginBottom:16}}><strong>Crianças:</strong> {qrResult.user?.children||0}</div>
+                    <button className="btn btn-green" style={{width:"100%",justifyContent:"center"}} onClick={confirmDelivery}>✅ Confirmar Entrega</button>
+                  </>
+                ) : (
+                  <div style={{color:"#991b1b",fontWeight:800}}>❌ {qrResult.msg}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* My history */}
+          <div className="card" style={{padding:32}}>
+            <h3 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:22,color:"var(--navy)",marginBottom:16}}>📋 Minhas Validações ({myHistory.length})</h3>
+            {myHistory.length === 0 ? (
+              <p style={{color:"var(--gray)",textAlign:"center",padding:32}}>Nenhuma validação registrada ainda</p>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Beneficiário</th><th>Evento</th><th>Data/Hora</th></tr></thead>
+                <tbody>
+                  {[...myHistory].reverse().map((h,i) => (
+                    <tr key={i}>
+                      <td style={{fontWeight:700}}>{h.userName}</td>
+                      <td>{h.eventLabel}</td>
+                      <td style={{color:"var(--gray)",fontSize:13}}>{h.ts}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function Admin({ go, logout, toast }) {
   const [tab, setTab] = useState("cadastros");
@@ -1241,6 +1513,7 @@ function Admin({ go, logout, toast }) {
   const [users, setUsers] = useState([]);
   const [events, setEvents] = useState([]);
   const [volunteers, setVolunteers] = useState([]);
+  const [collaborators, setCollaborators] = useState([]);
   const [selUser, setSelUser] = useState(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
@@ -1273,6 +1546,8 @@ function Admin({ go, logout, toast }) {
       setVolunteers(vols);
       setQrHistory(hist);
       setDonGoal(goal);
+      const cols = await DB.getCollaborators();
+      setCollaborators(cols);
     };
     loadData();
     // Real-time listener for users
@@ -1413,7 +1688,7 @@ function Admin({ go, logout, toast }) {
 
   const stats = { total:users.length, pending:users.filter(u=>u.status==="pending").length, approved:users.filter(u=>u.status==="approved").length, rejected:users.filter(u=>u.status==="rejected").length };
 
-  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["voluntarios","🤝 Voluntários"],["stats","📊 Estatísticas"]];
+  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"]];
 
   return (
     <>
@@ -1697,6 +1972,54 @@ function Admin({ go, logout, toast }) {
           </div>
         )}
 
+        {/* ── COLABORADORES ── */}
+        {tab==="colaboradores" && (
+          <div className="fade-in">
+            <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>🤝 Colaboradores</h1>
+            <p style={{color:"#64748b",marginBottom:20}}>{collaborators.length} colaborador(es) cadastrado(s)</p>
+            <div className="card" style={{overflow:"hidden"}}>
+              <table className="tbl">
+                <thead><tr><th>Nome</th><th>E-mail</th><th>Função</th><th>Data</th><th>Status</th><th>Ações</th></tr></thead>
+                <tbody>
+                  {collaborators.length===0 ? (
+                    <tr><td colSpan={6} style={{textAlign:"center",padding:32,color:"#94a3b8"}}>Nenhum colaborador cadastrado</td></tr>
+                  ) : collaborators.map(c => (
+                    <tr key={c.id}>
+                      <td style={{fontWeight:700}}>{c.name}</td>
+                      <td style={{fontSize:13,color:"#64748b"}}>{c.email}</td>
+                      <td><span className="badge badge-blue">{c.role}</span></td>
+                      <td style={{fontSize:12,color:"#94a3b8"}}>{c.createdAt}</td>
+                      <td>
+                        <span className={`badge badge-${c.status==="approved"?"green":c.status==="rejected"?"red":"yellow"}`}>
+                          {c.status==="approved"?"Aprovado":c.status==="rejected"?"Rejeitado":"Pendente"}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{display:"flex",gap:6}}>
+                          {c.status!=="approved" && (
+                            <button className="btn btn-green btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={async () => {
+                              await DB.updateCollaborator(c.id, { status:"approved" });
+                              setCollaborators(prev => prev.map(x => x.id===c.id ? {...x,status:"approved"} : x));
+                              toast(`✅ ${c.name} aprovado!`, "success");
+                            }}>✓ Aprovar</button>
+                          )}
+                          {c.status!=="rejected" && (
+                            <button className="btn btn-red btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={async () => {
+                              await DB.updateCollaborator(c.id, { status:"rejected" });
+                              setCollaborators(prev => prev.map(x => x.id===c.id ? {...x,status:"rejected"} : x));
+                              toast("Colaborador rejeitado","error");
+                            }}>✕ Rejeitar</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* ── VOLUNTÁRIOS ── */}
         {tab==="voluntarios" && (
           <div className="fade-in">
@@ -1906,8 +2229,10 @@ export default function App() {
       {t && <div className={`toast toast-${t.type}`} style={{fontFamily:"'Nunito',sans-serif"}}>{t.msg}</div>}
       {page==="home" && <Home go={setPage} />}
       {page==="register" && <Register go={setPage} toast={toast} />}
+      {page==="collabregister" && <CollaboratorRegister go={setPage} toast={toast} />}
       {page==="login" && <Login go={setPage} onLogin={setUser} toast={toast} />}
       {page==="dashboard" && user && <Dashboard user={user} go={setPage} logout={logout} />}
+      {page==="collaborator" && user && <CollaboratorDashboard user={user} go={setPage} logout={logout} toast={toast} />}
       {page==="admin" && <Admin go={setPage} logout={logout} toast={toast} />}
     </>
   );
