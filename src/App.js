@@ -107,6 +107,10 @@ const DB = {
       await window.emailjs.send("SERVICE_ID","TEMPLATE_ID",{ to_email:to, subject, message:body });
     } catch(e) { console.warn("Email não enviado:",e); }
   },
+  // Admins com permissões
+  async getAdmins() { const s = await getDocs(collection(db,"admins")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveAdmin(a) { const {id,...data}=a; if(id) await setDoc(doc(db,"admins",id),data); else return await addDoc(collection(db,"admins"),data); },
+  async deleteAdmin(id) { await deleteDoc(doc(db,"admins",id)); },
   // Realtime listeners
   onUsers(cb) { return onSnapshot(collection(db,"users"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
   onEvents(cb) { return onSnapshot(collection(db,"events"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
@@ -1319,8 +1323,19 @@ function Login({ go, onLogin, toast }) {
   const [email, setEmail] = useState(""); const [pw, setPw] = useState("");
   const [tab, setTab] = useState("familia"); // "familia" | "colaborador"
   const handleLogin = async () => {
+    // Super admin hardcoded
     if (email === "admin@marildabrandao.org.br" && pw === "admin123") {
-      onLogin({ name:"Administrador", email, role:"admin" }); go("admin"); return;
+      onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
+    }
+    // Admins cadastrados no Firestore
+    if (tab === "familia" || tab === "colaborador") {
+      // verifica se é admin cadastrado
+      const admins = await DB.getAdmins();
+      const adm = admins.find(a => a.email===email && a.password===pw);
+      if (adm) {
+        if (!adm.active) { toast("Acesso de administrador desativado","error"); return; }
+        onLogin({...adm, role:"admin", superAdmin:false}); go("admin"); return;
+      }
     }
     if (tab === "colaborador") {
       const cols = await DB.getCollaborators();
@@ -2258,9 +2273,21 @@ function TabConteudo({ toast }) {
 }
 
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
-function Admin({ go, logout, toast }) {
-  const [tab, setTab] = useState("cadastros");
+function Admin({ go, logout, toast, adminUser }) {
+  const isSuperAdmin = adminUser?.superAdmin === true;
+  const userPerms = adminUser?.permissions; // "all" or array of tab ids
+
+  const hasPermission = (tabId) => {
+    if (isSuperAdmin || userPerms === "all") return true;
+    if (Array.isArray(userPerms)) return userPerms.includes(tabId);
+    return false;
+  };
+
+  const [tab, setTab] = useState(null); // will be set after perms load
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [admins, setAdmins] = useState([]);
+  const [adminForm, setAdminForm] = useState({ name:"", email:"", password:"", permissions:[], active:true });
+  const [editingAdmin, setEditingAdmin] = useState(null);
   const [users, setUsers] = useState([]);
   const [events, setEvents] = useState([]);
   const [volunteers, setVolunteers] = useState([]);
@@ -2320,6 +2347,10 @@ function Admin({ go, logout, toast }) {
       }
       const ss = await DB.getSiteSettings();
       setSiteSettings(ss);
+      if (isSuperAdmin) {
+        const adms = await DB.getAdmins();
+        setAdmins(adms);
+      }
     };
     loadData();
     // Real-time listener for users
@@ -2483,7 +2514,19 @@ function Admin({ go, logout, toast }) {
 
   const stats = { total:users.length, pending:users.filter(u=>u.status==="pending").length, approved:users.filter(u=>u.status==="approved").length, rejected:users.filter(u=>u.status==="rejected").length };
 
-  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],["conteudo","🌐 Conteúdo do Site"],["config","⚙️ Configurações"]];
+  const allTabs = [
+    ["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],
+    ["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],
+    ["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],
+    ["conteudo","🌐 Conteúdo do Site"],["config","⚙️ Configurações"],
+    ...(isSuperAdmin ? [["admins","👑 Administradores"]] : [])
+  ];
+  const tabs = allTabs.filter(([id]) => hasPermission(id));
+
+  // Set default tab to first allowed
+  React.useEffect(() => {
+    if (!tab && tabs.length > 0) setTab(tabs[0][0]);
+  }, [tabs.length]);
 
   return (
     <>
@@ -3313,6 +3356,122 @@ function Admin({ go, logout, toast }) {
             )}
           </div>
         )}
+
+        {/* ── ADMINS ── */}
+        {tab==="admins" && isSuperAdmin && (() => {
+          const ALL_PERM_TABS = [
+            ["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],
+            ["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],
+            ["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],
+            ["conteudo","🌐 Conteúdo do Site"],["config","⚙️ Configurações"]
+          ];
+          const curForm = editingAdmin || adminForm;
+          const setCurForm = editingAdmin ? setEditingAdmin : setAdminForm;
+          const togglePerm = (id) => {
+            const cur = curForm.permissions || [];
+            setCurForm({...curForm, permissions: cur.includes(id) ? cur.filter(p=>p!==id) : [...cur,id]});
+          };
+          const saveAdminHandler = async () => {
+            if (!curForm.name||!curForm.email||!curForm.password) { toast("Preencha nome, e-mail e senha","error"); return; }
+            if ((curForm.permissions||[]).length===0) { toast("Selecione ao menos uma permissão","error"); return; }
+            try {
+              await DB.saveAdmin(curForm);
+              toast("Administrador salvo!","success");
+              setAdmins(await DB.getAdmins());
+              setAdminForm({ name:"", email:"", password:"", permissions:[], active:true });
+              setEditingAdmin(null);
+            } catch(e) { toast("Erro ao salvar: "+e.message,"error"); }
+          };
+          return (
+            <div className="fade-in">
+              <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>👑 Administradores</h1>
+              <p style={{color:"#64748b",marginBottom:24}}>Crie acessos administrativos com permissões específicas por seção</p>
+
+              {/* Form card */}
+              <div className="card" style={{padding:28,marginBottom:24,borderLeft:"4px solid #6366f1"}}>
+                <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:16}}>{editingAdmin?"✏️ Editar Administrador":"➕ Novo Administrador"}</h3>
+                <div className="grid-2" style={{gap:16,marginBottom:16}}>
+                  <div className="form-group" style={{margin:0}}>
+                    <label className="form-label">Nome</label>
+                    <input className="form-input" value={curForm.name} onChange={e=>setCurForm({...curForm,name:e.target.value})} placeholder="Nome completo" />
+                  </div>
+                  <div className="form-group" style={{margin:0}}>
+                    <label className="form-label">E-mail</label>
+                    <input className="form-input" type="email" value={curForm.email} onChange={e=>setCurForm({...curForm,email:e.target.value})} placeholder="email@exemplo.com" />
+                  </div>
+                  <div className="form-group" style={{margin:0}}>
+                    <label className="form-label">Senha</label>
+                    <input className="form-input" type="password" value={curForm.password} onChange={e=>setCurForm({...curForm,password:e.target.value})} placeholder="Senha de acesso" />
+                  </div>
+                  <div className="form-group" style={{margin:0,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontWeight:700,color:"#0a2d6e"}}>
+                      <input type="checkbox" checked={curForm.active} onChange={e=>setCurForm({...curForm,active:e.target.checked})} style={{width:16,height:16}} />
+                      Acesso ativo
+                    </label>
+                  </div>
+                </div>
+                <div style={{marginBottom:16}}>
+                  <label className="form-label" style={{marginBottom:10,display:"block"}}>🔐 Permissões — selecione as seções que este admin pode acessar:</label>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    <button type="button" className="btn btn-sm" style={{background:"#e0e7ff",color:"#3730a3",border:"none"}}
+                      onClick={() => setCurForm({...curForm, permissions: ALL_PERM_TABS.map(([id])=>id)})}>✅ Todas</button>
+                    <button type="button" className="btn btn-sm" style={{background:"#fee2e2",color:"#991b1b",border:"none"}}
+                      onClick={() => setCurForm({...curForm, permissions:[]})}>🚫 Nenhuma</button>
+                    {ALL_PERM_TABS.map(([id, label]) => {
+                      const checked = (curForm.permissions||[]).includes(id);
+                      return (
+                        <label key={id} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
+                          background:checked?"#dbeafe":"#f1f5f9",color:checked?"#1d4ed8":"#475569",
+                          borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:13,transition:".2s",
+                          border:checked?"2px solid #93c5fd":"2px solid transparent"}}>
+                          <input type="checkbox" checked={checked} onChange={()=>togglePerm(id)} style={{display:"none"}} />
+                          {label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                  <button className="btn btn-gold" onClick={saveAdminHandler}>{editingAdmin?"💾 Salvar Alterações":"➕ Criar Administrador"}</button>
+                  {editingAdmin && <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={()=>setEditingAdmin(null)}>Cancelar</button>}
+                </div>
+              </div>
+
+              {/* Admins list */}
+              {admins.length === 0 ? (
+                <div className="card" style={{padding:40,textAlign:"center",color:"#94a3b8"}}>
+                  <div style={{fontSize:48,marginBottom:8}}>👑</div>
+                  <p style={{fontWeight:700}}>Nenhum administrador cadastrado ainda</p>
+                  <p style={{fontSize:14}}>O Super Admin (hardcoded) sempre terá acesso total</p>
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {admins.map(adm => (
+                    <div key={adm.id} className="card" style={{padding:20,display:"flex",flexWrap:"wrap",alignItems:"center",gap:12,borderLeft:`4px solid ${adm.active?"#22c55e":"#94a3b8"}`}}>
+                      <div style={{flex:1,minWidth:180}}>
+                        <div style={{fontWeight:800,color:"#0a2d6e",fontSize:16}}>{adm.name}</div>
+                        <div style={{color:"#64748b",fontSize:13}}>{adm.email}</div>
+                      </div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4,flex:2}}>
+                        {(adm.permissions||[]).map(p => {
+                          const lbl = ALL_PERM_TABS.find(([id])=>id===p)?.[1]||p;
+                          return <span key={p} style={{background:"#dbeafe",color:"#1d4ed8",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>{lbl}</span>;
+                        })}
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <span className={`badge badge-${adm.active?"green":"yellow"}`}>{adm.active?"Ativo":"Inativo"}</span>
+                        <button className="btn btn-sm" style={{background:"#e0e7ff",color:"#3730a3"}}
+                          onClick={()=>setEditingAdmin({...adm})}>✏️</button>
+                        <button className="btn btn-sm btn-red"
+                          onClick={async()=>{ if(window.confirm("Excluir este administrador?")){ await DB.deleteAdmin(adm.id); setAdmins(await DB.getAdmins()); toast("Admin removido","success"); } }}>🗑️</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* USER DETAIL MODAL */}
@@ -3403,7 +3562,7 @@ export default function App() {
       {page==="login" && <Login go={setPage} onLogin={setUser} toast={toast} />}
       {page==="dashboard" && user && <Dashboard user={user} go={setPage} logout={logout} />}
       {page==="collaborator" && user && <CollaboratorDashboard user={user} go={setPage} logout={logout} toast={toast} />}
-      {page==="admin" && <Admin go={setPage} logout={logout} toast={toast} />}
+      {page==="admin" && <Admin go={setPage} logout={logout} toast={toast} adminUser={user} />}
     </>
   );
 }
