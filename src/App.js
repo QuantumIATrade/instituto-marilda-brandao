@@ -2338,7 +2338,7 @@ function Admin({ go, logout, toast }) {
                               for (const file of files) {
                                 const url = await DB.uploadEventPhoto(ev.id, file);
                                 const photoEntry = { url, uploadedAt: new Date().toLocaleString("pt-BR") };
-                                const saved = await DB.saveEventPhoto(ev.id, photoEntry);
+                                await DB.saveEventPhoto(ev.id, photoEntry);
                                 setEventPhotos(prev => ({ ...prev, [ev.id]: [...(prev[ev.id]||[]), photoEntry] }));
                               }
                               toast(`📸 ${files.length} foto(s) adicionada(s)!`, "success");
