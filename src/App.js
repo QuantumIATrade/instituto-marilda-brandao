@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -57,7 +57,42 @@ const uploadDocumento = async (userId, tipo, file, onProgress) => {
   });
 };
 
-// ─── DB HELPERS ──────────────────────────────────────────────────────────────
+// ─── BRUTE FORCE PROTECTION ──────────────────────────────────────────────────
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutos
+
+const loginAttempts = {}; // { email: { count, firstAt } }
+
+const checkBruteForce = (email) => {
+  const key = email.toLowerCase();
+  const now = Date.now();
+  const rec = loginAttempts[key];
+  if (!rec) return { blocked: false };
+  // Reset se passou o tempo de bloqueio
+  if (now - rec.firstAt > LOCKOUT_MS) {
+    delete loginAttempts[key];
+    return { blocked: false };
+  }
+  if (rec.count >= MAX_ATTEMPTS) {
+    const remaining = Math.ceil((LOCKOUT_MS - (now - rec.firstAt)) / 60000);
+    return { blocked: true, remaining };
+  }
+  return { blocked: false };
+};
+
+const registerFailedAttempt = (email) => {
+  const key = email.toLowerCase();
+  const now = Date.now();
+  if (!loginAttempts[key] || (now - loginAttempts[key].firstAt > LOCKOUT_MS)) {
+    loginAttempts[key] = { count: 1, firstAt: now };
+  } else {
+    loginAttempts[key].count++;
+  }
+};
+
+const clearAttempts = (email) => {
+  delete loginAttempts[email.toLowerCase()];
+};
 const DB = {
   async getUsers() { const s = await getDocs(collection(db,"users")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveUser(u) { const {id,...data}=u; await setDoc(doc(db,"users",id),data); },
@@ -1139,7 +1174,10 @@ function Register({ go, toast }) {
       }
 
       // Save user WITHOUT document URLs (only metadata)
-      const { confirm, ...userData } = f;
+      // Cria conta no Firebase Auth PRIMEIRO
+      try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth registro:", e.message); }
+      // Salva no Firestore SEM a senha
+      const { confirm, password, ...userData } = f;
       const newUser = {
         ...userData,
         id: userId,
@@ -1152,8 +1190,6 @@ function Register({ go, toast }) {
         lgpdDate: new Date().toLocaleString("pt-BR"),
       };
       await DB.saveUser(newUser);
-      // Cria conta no Firebase Auth silenciosamente
-      try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth registro:", e.message); }
       setStep(3);
     } catch(err) {
       toast("Erro no envio: " + (err.message||"tente novamente"), "error");
@@ -1355,50 +1391,89 @@ function Login({ go, onLogin, toast }) {
     if (!forgotEmail) { toast("Digite seu e-mail","error"); return; }
     setForgotLoading(true);
     try {
-      const users = await DB.getUsers();
-      const u = users.find(u => u.email === forgotEmail);
-      if (!u) { toast("E-mail não encontrado","error"); setForgotLoading(false); return; }
-      // Gera nova senha temporária
-      const newPw = Math.random().toString(36).slice(-8).toUpperCase();
-      await DB.updateUser(u.id, { password: newPw });
-      await DB.sendEmail(forgotEmail, "Sua nova senha - Instituto Marilda Brandão",
-        `Olá ${u.name},\n\nSua nova senha de acesso é: ${newPw}\n\nAcesse o site e troque sua senha assim que possível.\n\nInstituto Marilda Brandão`);
-      toast("Nova senha enviada para seu e-mail!","success");
+      // Firebase envia e-mail de redefinição automaticamente (sem gerar senha manual)
+      await sendPasswordResetEmail(auth, forgotEmail);
+      toast("📧 E-mail de redefinição enviado! Verifique sua caixa de entrada.","success");
       setShowForgot(false); setForgotEmail("");
-    } catch(e) { toast("Erro: "+e.message,"error"); }
+    } catch(e) {
+      if (e.code === "auth/user-not-found") {
+        // Não revelamos se o e-mail existe ou não (segurança)
+        toast("📧 Se o e-mail estiver cadastrado, você receberá as instruções.","success");
+        setShowForgot(false); setForgotEmail("");
+      } else {
+        toast("Erro: "+e.message,"error");
+      }
+    }
     setForgotLoading(false);
   };
   const handleLogin = async () => {
-    // Super admin — verifica Firestore, fallback para hardcoded
-    const superCreds = await DB.getSuperAdminCreds();
-    if (email === superCreds.email && pw === superCreds.password) {
-      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
-      onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
+    if (!email || !pw) { toast("Preencha e-mail e senha","error"); return; }
+
+    // ── Brute force check ──
+    const bf = checkBruteForce(email);
+    if (bf.blocked) {
+      toast(`🔒 Muitas tentativas. Tente novamente em ${bf.remaining} min.`,"error"); return;
     }
-    // Admins cadastrados no Firestore
-    const admins = await DB.getAdmins();
-    const adm = admins.find(a => a.email===email && a.password===pw);
-    if (adm) {
-      if (!adm.active) { toast("Acesso de administrador desativado","error"); return; }
-      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
-      onLogin({...adm, role:"admin", superAdmin:false}); go("admin"); return;
+
+    try {
+      // Super admin — verifica Firestore
+      const superCreds = await DB.getSuperAdminCreds();
+      if (email === superCreds.email) {
+        if (pw !== superCreds.password) {
+          registerFailedAttempt(email);
+          toast("Senha incorreta","error"); return;
+        }
+        await ensureFirebaseAuth(email, pw);
+        clearAttempts(email);
+        onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
+      }
+
+      // Autentica pelo Firebase Auth
+      let fbUser;
+      try {
+        fbUser = await signInWithEmailAndPassword(auth, email, pw);
+      } catch(e) {
+        registerFailedAttempt(email);
+        const remaining = MAX_ATTEMPTS - (loginAttempts[email.toLowerCase()]?.count || 0);
+        if (remaining <= 2 && remaining > 0) {
+          toast(`Senha incorreta. ${remaining} tentativa(s) restante(s) antes do bloqueio.`,"error");
+        } else {
+          toast("E-mail ou senha incorretos","error");
+        }
+        return;
+      }
+
+      // Credenciais válidas no Firebase Auth — busca perfil no Firestore
+      clearAttempts(email);
+
+      // Verifica se é admin cadastrado
+      const admins = await DB.getAdmins();
+      const adm = admins.find(a => a.email === email);
+      if (adm) {
+        if (!adm.active) { toast("Acesso de administrador desativado","error"); return; }
+        onLogin({...adm, role:"admin", superAdmin:false}); go("admin"); return;
+      }
+
+      if (tab === "colaborador") {
+        const cols = await DB.getCollaborators();
+        const c = cols.find(c => c.email === email);
+        if (!c) { toast("Colaborador não encontrado","error"); return; }
+        if (c.status==="pending") { toast("Cadastro aguardando aprovação do admin","error"); return; }
+        if (c.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+        onLogin({...c, role:"collaborator"}); go("collaborator"); return;
+      }
+
+      const users = await DB.getUsers();
+      const u = users.find(u => u.email === email);
+      if (!u) { toast("Usuário não encontrado","error"); return; }
+      if (u.status==="pending") { toast("Cadastro aguardando aprovação","error"); return; }
+      if (u.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+      onLogin(u); go("dashboard");
+
+    } catch(e) {
+      registerFailedAttempt(email);
+      toast("Erro no login: "+e.message,"error");
     }
-    if (tab === "colaborador") {
-      const cols = await DB.getCollaborators();
-      const c = cols.find(c => c.email===email && c.password===pw);
-      if (!c) { toast("E-mail ou senha incorretos","error"); return; }
-      if (c.status==="pending") { toast("Cadastro aguardando aprovação do admin","error"); return; }
-      if (c.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
-      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
-      onLogin({...c, role:"collaborator"}); go("collaborator"); return;
-    }
-    const users = await DB.getUsers();
-    const u = users.find(u => u.email===email && u.password===pw);
-    if (!u) { toast("E-mail ou senha incorretos","error"); return; }
-    if (u.status==="pending") { toast("Cadastro aguardando aprovação","error"); return; }
-    if (u.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
-    try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
-    onLogin(u); go("dashboard");
   };
   const inp = {background:"rgba(255,255,255,.1)",border:"2px solid rgba(255,255,255,.2)",color:"#fff"};
   return (
@@ -1684,24 +1759,29 @@ function Dashboard({ user, go, logout }) {
             </div>
             <div style={{display:"flex",gap:12,marginTop:4}}>
               <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={async()=>{
-                if (changePw.current !== userData.password) { alert("Senha atual incorreta"); return; }
                 if (changePw.newPw.length < 6) { alert("Nova senha deve ter ao menos 6 caracteres"); return; }
                 if (changePw.newPw !== changePw.confirm) { alert("As senhas não coincidem"); return; }
-                // Atualiza no Firestore
-                await DB.updateUser(userData.id, { password: changePw.newPw });
-                // Atualiza no Firebase Auth
                 try {
                   const currentUser = auth.currentUser;
-                  if (currentUser) {
-                    const cred = EmailAuthProvider.credential(userData.email, changePw.current);
-                    await reauthenticateWithCredential(currentUser, cred);
-                    await updatePassword(currentUser, changePw.newPw);
+                  if (!currentUser) { alert("Sessão expirada. Faça login novamente."); return; }
+                  // Re-autentica com a senha atual
+                  const cred = EmailAuthProvider.credential(userData.email, changePw.current);
+                  await reauthenticateWithCredential(currentUser, cred);
+                  // Atualiza no Firebase Auth
+                  await updatePassword(currentUser, changePw.newPw);
+                  // Remove senha do Firestore se ainda existir
+                  if (userData.password) await DB.updateUser(userData.id, { password: null });
+                  setUserData({...userData, password: null});
+                  setChangePw({ current:"", newPw:"", confirm:"" });
+                  setShowChangePw(false);
+                  alert("✅ Senha alterada com sucesso!");
+                } catch(e) {
+                  if (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential") {
+                    alert("Senha atual incorreta");
+                  } else {
+                    alert("Erro: "+e.message);
                   }
-                } catch(e) { console.warn("Auth update pw:", e.message); }
-                setUserData({...userData, password: changePw.newPw});
-                setChangePw({ current:"", newPw:"", confirm:"" });
-                setShowChangePw(false);
-                alert("✅ Senha alterada com sucesso!");
+                }
               }}>💾 Salvar nova senha</button>
               <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}}
                 onClick={()=>setShowChangePw(false)}>Cancelar</button>
@@ -1722,8 +1802,11 @@ function CollaboratorRegister({ go, toast }) {
     if (f.password !== f.confirm) { toast("Senhas não conferem","error"); return; }
     const cols = await DB.getCollaborators();
     if (cols.find(c => c.email===f.email)) { toast("E-mail já cadastrado","error"); return; }
-    const newCol = { ...f, id:`C${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR") };
-    delete newCol.confirm;
+    // Cria no Firebase Auth primeiro
+    try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth collab:", e.message); }
+    // Salva no Firestore SEM senha
+    const { confirm, password, ...colData } = f;
+    const newCol = { ...colData, id:`C${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR") };
     await DB.saveCollaborator(newCol);
     toast("✓ Solicitação enviada! Aguarde aprovação do administrador.","success");
     setTimeout(() => go("login"), 1800);
@@ -1828,23 +1911,28 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
     setQrResult(null); setQrInput("");
   };
 
+  const scanningRef = useRef(false);
+
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment", width:{ideal:1280}, height:{ideal:720} } });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", true);
-        videoRef.current.setAttribute("muted", true);
-        await videoRef.current.play();
-      }
+      scanningRef.current = true;
       setScanning(true);
-      if (!window.jsQR) {
-        const s = document.createElement("script");
-        s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
-        s.onload = () => scanLoop();
-        document.head.appendChild(s);
-      } else { scanLoop(); }
+      // Aguarda o React renderizar o <video> antes de iniciar
+      setTimeout(() => {
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().then(() => {
+          if (!window.jsQR) {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+            s.onload = () => scanLoop();
+            document.head.appendChild(s);
+          } else { scanLoop(); }
+        }).catch(e => toast("Erro ao iniciar vídeo: "+e.message,"error"));
+      }, 150);
     } catch(e) { toast("Câmera não disponível: "+e.message,"error"); }
   };
 
@@ -1852,8 +1940,8 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     const tick = () => {
-      if (!videoRef.current || !streamRef.current) return;
-      if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+      if (!scanningRef.current || !videoRef.current || !streamRef.current) return;
+      if (videoRef.current.readyState >= 2) {
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
         ctx.drawImage(videoRef.current, 0, 0);
@@ -1867,6 +1955,7 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
   };
 
   const stopCamera = () => {
+    scanningRef.current = false;
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     setScanning(false);
@@ -2579,36 +2668,42 @@ function Admin({ go, logout, toast, adminUser }) {
   };
 
   // Camera QR scanning
+  const scanningRef = useRef(false);
+
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment", width:{ideal:1280}, height:{ideal:720} } });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", true);
-        videoRef.current.setAttribute("muted", true);
-        await videoRef.current.play();
-      }
+      scanningRef.current = true;
       setScanning(true);
-      // Load jsQR dynamically
-      if (!window.jsQR) {
-        const script = document.createElement("script");
-        script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
-        script.onload = () => startScanLoop();
-        document.head.appendChild(script);
-      } else { startScanLoop(); }
+      // Aguarda React renderizar o <video> antes de iniciar
+      setTimeout(() => {
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().then(() => {
+          if (!window.jsQR) {
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+            script.onload = () => startScanLoop();
+            document.head.appendChild(script);
+          } else { startScanLoop(); }
+        }).catch(e => toast("Erro ao iniciar vídeo: "+e.message, "error"));
+      }, 150);
     } catch(e) { toast("Câmera não disponível: "+e.message, "error"); }
   };
   const stopCamera = () => {
+    scanningRef.current = false;
     streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
     setScanning(false);
   };
   const startScanLoop = () => {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     const loop = () => {
-      if (!videoRef.current || !scanning) return;
-      if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+      if (!scanningRef.current || !videoRef.current || !streamRef.current) return;
+      if (videoRef.current.readyState >= 2) {
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
         ctx.drawImage(videoRef.current, 0, 0);
@@ -3620,7 +3715,13 @@ function Admin({ go, logout, toast, adminUser }) {
             if (!curForm.name||!curForm.email||!curForm.password) { toast("Preencha nome, e-mail e senha","error"); return; }
             if ((curForm.permissions||[]).length===0) { toast("Selecione ao menos uma permissão","error"); return; }
             try {
-              await DB.saveAdmin(curForm);
+              // Cria/atualiza no Firebase Auth
+              try { await createUserWithEmailAndPassword(auth, curForm.email, curForm.password); } catch(e) {
+                if (e.code !== "auth/email-already-in-use") console.warn("Auth admin:", e.message);
+              }
+              // Salva no Firestore SEM a senha
+              const { password, ...adminData } = curForm;
+              await DB.saveAdmin(adminData);
               toast("Administrador salvo!","success");
               setAdmins(await DB.getAdmins());
               setAdminForm({ name:"", email:"", password:"", permissions:[], active:true });
@@ -3771,12 +3872,14 @@ function Admin({ go, logout, toast, adminUser }) {
                 <button className="btn btn-red" onClick={() => { rejectUser(selUser.id); setSelUser({...selUser,status:"rejected"}); }}>✗ Rejeitar</button>
               </>}
               <button className="btn" style={{background:"#fef9c3",color:"#854d0e"}} onClick={async()=>{
-                const newPw = Math.random().toString(36).slice(-8).toUpperCase();
-                if (!window.confirm(`Resetar senha de ${selUser.name}?\nNova senha temporária: ${newPw}`)) return;
-                await DB.updateUser(selUser.id, { password: newPw });
-                await DB.sendEmail(selUser.email, "Sua senha foi redefinida - Instituto Marilda Brandão",
-                  `Olá ${selUser.name},\n\nSua senha foi redefinida pelo administrador.\n\nNova senha temporária: ${newPw}\n\nAcesse o site e troque sua senha assim que possível.\n\nInstituto Marilda Brandão`);
-                toast(`✅ Senha resetada! Nova senha: ${newPw}`,"success");
+                if (!window.confirm(`Enviar e-mail de redefinição de senha para ${selUser.name}?`)) return;
+                try {
+                  await sendPasswordResetEmail(auth, selUser.email);
+                  toast(`✅ E-mail de redefinição enviado para ${selUser.email}`,"success");
+                } catch(e) {
+                  // Usuário pode ainda não ter conta no Firebase Auth (migração pendente)
+                  toast("Usuário precisa fazer login primeiro para migrar a conta","error");
+                }
               }}>🔑 Resetar Senha</button>
               <button className="btn" style={{background:"#f1f5f9",color:"#64748b",marginLeft:"auto"}} onClick={() => setSelUser(null)}>Fechar</button>
             </div>
