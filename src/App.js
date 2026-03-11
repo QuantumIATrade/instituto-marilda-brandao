@@ -99,9 +99,9 @@ const DB = {
   async deleteEventPhoto(eventId, docId) { await deleteDoc(doc(db,`event_photos_${eventId}`,docId)); },
   // ── Site settings (YouTube, Cloudinary, etc.)
   async getSiteSettings() { const d = await getDoc(doc(db,"settings","site")); return d.exists()?d.data():{ youtubeId:"dQw4w9WgXcQ", cloudinaryCloud:"", cloudinaryPreset:"" }; },
-  async saveSiteSettings(s) { await setDoc(doc(db,"settings","site"),s); },
+  async saveSiteSettings(s) { await setDoc(doc(db,"settings","site"), s, { merge: true }); },
   async getSuperAdminCreds() { const d = await getDoc(doc(db,"settings","super_admin")); return d.exists()?d.data():{ email:"admin@marildabrandao.org.br", password:"admin123" }; },
-  async saveSuperAdminCreds(c) { await setDoc(doc(db,"settings","super_admin"),c); },
+  async saveSuperAdminCreds(c) { await setDoc(doc(db,"settings","super_admin"), c, { merge: true }); },
   // EmailJS — usa chaves salvas no Firestore (settings/site)
   async sendEmail(to, subject, body) {
     try {
@@ -3410,14 +3410,18 @@ function Admin({ go, logout, toast, adminUser }) {
                 if (!newCreds.email) { toast("E-mail não pode ser vazio","error"); return; }
                 if (newCreds.password && newCreds.password !== newCreds.confirm) { toast("As senhas não coincidem","error"); return; }
                 if (newCreds.password && newCreds.password.length < 6) { toast("Senha deve ter ao menos 6 caracteres","error"); return; }
-                const updated = {
-                  email: newCreds.email,
-                  password: newCreds.password || superCreds.password
-                };
-                await DB.saveSuperAdminCreds(updated);
-                setSuperCreds(updated);
-                setNewCreds({ email: updated.email, password:"", confirm:"" });
-                toast("Dados de acesso atualizados! Use as novas credenciais no próximo login.","success");
+                try {
+                  // Busca senha atual do Firestore caso state esteja vazio
+                  const current = await DB.getSuperAdminCreds();
+                  const updated = {
+                    email: newCreds.email,
+                    password: newCreds.password || current.password
+                  };
+                  await DB.saveSuperAdminCreds(updated);
+                  setSuperCreds(updated);
+                  setNewCreds({ email: updated.email, password:"", confirm:"" });
+                  toast("✅ Dados de acesso atualizados! Use as novas credenciais no próximo login.","success");
+                } catch(e) { toast("Erro ao salvar: "+e.message,"error"); }
               }}>💾 Salvar Dados de Acesso</button>
             </div>
             )}
@@ -3436,7 +3440,7 @@ function Admin({ go, logout, toast, adminUser }) {
                   </div>
                 </div>
                 <button className="btn btn-gold" style={{marginBottom:0}} onClick={async () => {
-                  await DB.saveSiteSettings(siteSettings);
+                  await DB.saveSiteSettings({ youtubeId: siteSettings.youtubeId||"" });
                   toast("🎬 Vídeo atualizado!", "success");
                 }}>Salvar</button>
               </div>
@@ -3478,7 +3482,7 @@ function Admin({ go, logout, toast, adminUser }) {
               <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                 <button className="btn btn-gold" onClick={async () => {
                   if (!siteSettings.cloudinaryCloud || !siteSettings.cloudinaryPreset) { toast("Preencha Cloud Name e Upload Preset","error"); return; }
-                  await DB.saveSiteSettings(siteSettings);
+                  await DB.saveSiteSettings({ cloudinaryCloud: siteSettings.cloudinaryCloud, cloudinaryPreset: siteSettings.cloudinaryPreset });
                   toast("☁️ Cloudinary configurado!", "success");
                 }}>Salvar</button>
                 {siteSettings.cloudinaryCloud && siteSettings.cloudinaryPreset && (
@@ -3540,10 +3544,15 @@ function Admin({ go, logout, toast, adminUser }) {
               </div>
               <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
                 <button className="btn btn-gold" onClick={async()=>{
-                  await DB.saveSiteSettings(siteSettings);
-                  // reinit emailjs with new key
-                  if (window.emailjs && siteSettings.emailjsPublicKey) window.emailjs.init(siteSettings.emailjsPublicKey);
-                  toast("EmailJS salvo!","success");
+                  try {
+                    await DB.saveSiteSettings({
+                      emailjsPublicKey: siteSettings.emailjsPublicKey||"",
+                      emailjsServiceId: siteSettings.emailjsServiceId||"",
+                      emailjsTemplateId: siteSettings.emailjsTemplateId||""
+                    });
+                    if (window.emailjs && siteSettings.emailjsPublicKey) window.emailjs.init(siteSettings.emailjsPublicKey);
+                    toast("✅ EmailJS salvo!","success");
+                  } catch(e) { toast("Erro: "+e.message,"error"); }
                 }}>💾 Salvar</button>
                 {siteSettings.emailjsPublicKey && siteSettings.emailjsServiceId && siteSettings.emailjsTemplateId && (
                   <button className="btn" style={{background:"#e0f2fe",color:"#0369a1"}} onClick={async()=>{
