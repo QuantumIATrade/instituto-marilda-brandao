@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -19,8 +19,8 @@ const storage = getStorage(fbApp);
 // ── Upload seguro para Firebase Storage (documentos privados)
 const uploadDocumento = (userId, tipo, file, onProgress) => new Promise((resolve, reject) => {
   const path = `documentos/${userId}/${tipo}_${Date.now()}.${file.name.split(".").pop()}`;
-  const storageRef = ref(storage, path);
-  const task = uploadBytesResumable(storageRef, file);
+  const sRef = storageRef(storage, path);
+  const task = uploadBytesResumable(sRef, file);
   task.on("state_changed",
     snap => onProgress && onProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)),
     reject,
@@ -1761,7 +1761,7 @@ function SelUserDocs({ userId, toast }) {
 
   const openDoc = async (path) => {
     try {
-      const url = await getDownloadURL(ref(storage, path));
+      const url = await getDownloadURL(storageRef(storage, path));
       window.open(url, "_blank");
     } catch { toast("Erro ao abrir documento","error"); }
   };
@@ -1769,7 +1769,7 @@ function SelUserDocs({ userId, toast }) {
   const deleteDoc = async (docId, path) => {
     if (!window.confirm("Remover este documento?")) return;
     try {
-      await deleteObject(ref(storage, path));
+      await deleteObject(storageRef(storage, path));
       await DB.deleteUserDoc(userId, docId);
       setDocs(prev => prev.filter(d => d.id !== docId));
       toast("Documento removido","info");
