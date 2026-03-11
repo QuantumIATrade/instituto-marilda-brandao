@@ -1649,32 +1649,6 @@ function Admin({ go, logout, toast }) {
     toast("✅ CSV exportado!","success");
   };
 
-  const printEventList = (ev) => {
-    const eligible = users.filter(u => u.status==="approved");
-    const w = window.open("","_blank");
-    w.document.write(`<html><head><title>Lista - ${ev.label}</title>
-    <style>body{font-family:Arial,sans-serif;padding:32px}h1{color:#0a2d6e}table{width:100%;border-collapse:collapse}
-    th{background:#0a2d6e;color:#fff;padding:8px 12px;text-align:left}td{padding:8px 12px;border-bottom:1px solid #ddd}
-    .badge{padding:3px 8px;border-radius:8px;font-size:11px;font-weight:700}
-    .ok{background:#dcfce7;color:#166534}.pending{background:#fef9c3;color:#854d0e}
-    @media print{button{display:none}}</style></head><body>
-    <h1>${ev.icon} ${ev.label}</h1>
-    <p>Data: ${new Date(ev.date).toLocaleDateString("pt-BR")} | Total beneficiários: ${eligible.length}</p>
-    <button onclick="window.print()" style="margin-bottom:16px;padding:8px 20px;background:#0a2d6e;color:#fff;border:none;border-radius:6px;cursor:pointer">🖨️ Imprimir</button>
-    <table><thead><tr><th>#</th><th>Nome</th><th>Cidade</th><th>Crianças</th><th>QR Code</th><th>Status</th><th>Assinatura</th></tr></thead><tbody>
-    ${eligible.map((u,i) => `<tr>
-      <td>${i+1}</td><td><strong>${u.name}</strong></td><td>${u.city||"-"}</td>
-      <td style="text-align:center">${u.children||0}</td>
-      <td style="font-size:11px;font-family:monospace">${u.qrCodes?.[ev.id]?.slice(0,20)+"..." || "Sem QR"}</td>
-      <td><span class="badge ${u.usedQrCodes?.[ev.id]?"ok":"pending"}">${u.usedQrCodes?.[ev.id]?"✓ Entregue":"Pendente"}</span></td>
-      <td style="border-bottom:1px solid #999;min-width:120px"></td>
-    </tr>`).join("")}
-    </tbody></table>
-    <p style="margin-top:32px;font-size:12px;color:#888">Gerado em ${new Date().toLocaleString("pt-BR")} · Instituto Marilda Brandão</p>
-    </body></html>`);
-    w.document.close();
-  };
-
   const rejectUser = async (id) => {
     await DB.updateUser(id, { status:"rejected" });
     setUsers(prev => prev.map(u => u.id===id ? {...u, status:"rejected"} : u));
