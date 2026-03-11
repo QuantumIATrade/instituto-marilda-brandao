@@ -1,4 +1,38 @@
 import { useState, useEffect, useRef } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+
+// ─── FIREBASE ────────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyA7HNVj7_bpbAxyNSeZIlkhxpM7AKIJUEk",
+  authDomain: "instituto-marilda-brandao.firebaseapp.com",
+  projectId: "instituto-marilda-brandao",
+  storageBucket: "instituto-marilda-brandao.firebasestorage.app",
+  messagingSenderId: "764911882866",
+  appId: "1:764911882866:web:9fd93e29c5ea4d10c4a8eb"
+};
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
+// ─── DB HELPERS ──────────────────────────────────────────────────────────────
+const DB = {
+  async getUsers() { const s = await getDocs(collection(db,"users")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveUser(u) { const {id,...data}=u; await setDoc(doc(db,"users",id),data); },
+  async updateUser(id,data) { await updateDoc(doc(db,"users",id),data); },
+  async getEvents() { const s = await getDocs(collection(db,"events")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveEvent(e) { const {id,...data}=e; await setDoc(doc(db,"events",id),data); },
+  async deleteEvent(id) { await deleteDoc(doc(db,"events",id)); },
+  async getVolunteers() { const s = await getDocs(collection(db,"volunteers")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveVolunteer(v) { await addDoc(collection(db,"volunteers"),v); },
+  async getQrHistory() { const s = await getDocs(collection(db,"qr_history")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveQrHistory(h) { await addDoc(collection(db,"qr_history"),h); },
+  async getDonGoal() { const d = await getDoc(doc(db,"settings","donation_goal")); return d.exists()?d.data():{ current:3200,target:5000,label:"Meta de Natal 2025",currency:"R$" }; },
+  async saveDonGoal(g) { await setDoc(doc(db,"settings","donation_goal"),g); },
+  // Realtime listeners
+  onUsers(cb) { return onSnapshot(collection(db,"users"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
+  onEvents(cb) { return onSnapshot(collection(db,"events"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
+};
+
 
 // ─── ESTILOS ────────────────────────────────────────────────────────────────
 const CSS = `
@@ -346,7 +380,8 @@ function Gallery() {
 function PixModal({ onClose }) {
   const pixKey = "pix@institutomarildabrandao.org.br";
   const [copied, setCopied] = useState(false);
-  const donGoal = JSON.parse(localStorage.getItem("imb_donation_goal") || JSON.stringify({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" }));
+  const [donGoal, setDonGoal] = useState({ current:3200, target:5000, label:"Meta de Natal 2025", currency:"R$" });
+  useEffect(() => { DB.getDonGoal().then(g => setDonGoal(g)); }, []);
   const pct = Math.min(100, Math.round(donGoal.current / donGoal.target * 100));
   const copy = () => { navigator.clipboard.writeText(pixKey); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   return (
@@ -390,11 +425,9 @@ function PixModal({ onClose }) {
 function VolunteerModal({ onClose, toast }) {
   const [form, setForm] = useState({ name:"", email:"", phone:"", area:"", availability:"", message:"" });
   const areas = ["Reforço Escolar","Informática","Esportes","Artes/Cultura","Assistência Social","Administrativo","Outro"];
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!form.name || !form.email || !form.area) { toast("Preencha nome, e-mail e área","error"); return; }
-    const vols = JSON.parse(localStorage.getItem("imb_volunteers") || "[]");
-    vols.push({ ...form, id: Date.now(), createdAt: new Date().toLocaleString("pt-BR") });
-    localStorage.setItem("imb_volunteers", JSON.stringify(vols));
+    await DB.saveVolunteer({ ...form, id: `V${Date.now()}`, createdAt: new Date().toLocaleString("pt-BR") });
     toast("✓ Inscrição enviada! Entraremos em contato em breve.","success");
     onClose();
   };
@@ -454,7 +487,8 @@ function Home({ go }) {
   const [toast, setToast] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const showToast = (msg, type = "info") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3200); };
-  const [donGoal] = useState(() => JSON.parse(localStorage.getItem("imb_donation_goal") || JSON.stringify({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" })));
+  const [donGoal, setDonGoal] = useState({ current:3200, target:5000, label:"Meta de Natal 2025", currency:"R$" });
+  useEffect(() => { DB.getDonGoal().then(g => setDonGoal(g)); }, []);
   const scrollTo = (id) => { document.getElementById(id)?.scrollIntoView({behavior:"smooth"}); setMenuOpen(false); };
   const programs = [
     { icon: "📚", title: "Reforço Escolar", desc: "Apoio pedagógico para crianças com dificuldades de aprendizado" },
@@ -906,15 +940,14 @@ function Home({ go }) {
 function Register({ go, toast }) {
   const [f, setF] = useState({ name:"",email:"",cpf:"",phone:"",birthdate:"",address:"",city:"",state:"",children:"0",childrenNames:"",reason:"",howKnew:"",photoUrl:"",password:"",confirm:"" });
   const set = k => e => setF({...f,[k]:e.target.value});
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!f.name||!f.email||!f.password) { toast("Preencha todos os campos obrigatórios","error"); return; }
     if (f.password !== f.confirm) { toast("Senhas não conferem","error"); return; }
-    const users = JSON.parse(localStorage.getItem("imb_users")||"[]");
+    const users = await DB.getUsers();
     if (users.find(u => u.email === f.email)) { toast("E-mail já cadastrado","error"); return; }
     const newUser = { ...f, id:`U${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR"), qrCodes:{}, usedQrCodes:{} };
     delete newUser.confirm;
-    users.push(newUser);
-    localStorage.setItem("imb_users", JSON.stringify(users));
+    await DB.saveUser(newUser);
     toast("✓ Cadastro enviado! Aguarde aprovação.","success");
     setTimeout(() => go("login"), 1500);
   };
@@ -995,11 +1028,11 @@ function Register({ go, toast }) {
 // ─── LOGIN ───────────────────────────────────────────────────────────────────
 function Login({ go, onLogin, toast }) {
   const [email, setEmail] = useState(""); const [pw, setPw] = useState("");
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (email === "admin@marildabrandao.org.br" && pw === "admin123") {
       onLogin({ name:"Administrador", email, role:"admin" }); go("admin"); return;
     }
-    const users = JSON.parse(localStorage.getItem("imb_users")||"[]");
+    const users = await DB.getUsers();
     const u = users.find(u => u.email===email && u.password===pw);
     if (!u) { toast("E-mail ou senha incorretos","error"); return; }
     if (u.status==="pending") { toast("Cadastro aguardando aprovação","error"); return; }
@@ -1091,11 +1124,13 @@ function EventCalendar({ events }) {
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 function Dashboard({ user, go, logout }) {
   const [userData, setUserData] = useState(user);
-  const events = JSON.parse(localStorage.getItem("imb_events")||"[]");
+  const [events, setEvents] = useState([]);
   useEffect(() => {
-    const users = JSON.parse(localStorage.getItem("imb_users")||"[]");
-    const fresh = users.find(u => u.email === user.email);
-    if (fresh) setUserData(fresh);
+    DB.getEvents().then(evs => setEvents(evs));
+    DB.getUsers().then(users => {
+      const fresh = users.find(u => u.email === user.email);
+      if (fresh) setUserData(fresh);
+    });
   }, [user.email]);
   const usedCount = Object.keys(userData.usedQrCodes||{}).length;
   const qrCount = Object.keys(userData.qrCodes||{}).length;
@@ -1217,57 +1252,68 @@ function Admin({ go, logout, toast }) {
   const videoRef = useRef(null);
   const [scanning, setScanning] = useState(false);
   const streamRef = useRef(null);
-  const [donGoal, setDonGoal] = useState(() => JSON.parse(localStorage.getItem("imb_donation_goal") || JSON.stringify({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" })));
-  const saveDonGoal = g => { setDonGoal(g); localStorage.setItem("imb_donation_goal", JSON.stringify(g)); };
+  const [donGoal, setDonGoal] = useState({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" });
+  const saveDonGoal = async g => { setDonGoal(g); await DB.saveDonGoal(g); };
+
+  const defaultEvents = [
+    {id:"natal",label:"Natal 2025",icon:"🎄",date:"2025-12-25",color:"#e8a020"},
+    {id:"pascoa",label:"Páscoa 2026",icon:"🐣",date:"2026-04-05",color:"#e8a020"},
+    {id:"crianca",label:"Dia das Crianças",icon:"🎁",date:"2025-10-12",color:"#e8a020"},
+    {id:"maes",label:"Dia das Mães",icon:"💐",date:"2025-05-11",color:"#e8a020"},
+  ];
 
   useEffect(() => {
-    setUsers(JSON.parse(localStorage.getItem("imb_users")||"[]"));
-    setEvents(JSON.parse(localStorage.getItem("imb_events")||JSON.stringify([
-      {id:"natal",label:"Natal 2025",icon:"🎄",date:"2025-12-25",color:"#e8a020"},
-      {id:"pascoa",label:"Páscoa 2026",icon:"🐣",date:"2026-04-05",color:"#e8a020"},
-      {id:"crianca",label:"Dia das Crianças",icon:"🎁",date:"2025-10-12",color:"#e8a020"},
-      {id:"maes",label:"Dia das Mães",icon:"💐",date:"2025-05-11",color:"#e8a020"},
-    ])));
-    setVolunteers(JSON.parse(localStorage.getItem("imb_volunteers")||"[]"));
-    setQrHistory(JSON.parse(localStorage.getItem("imb_qr_history")||"[]"));
+    const loadData = async () => {
+      const [us, evs, vols, hist, goal] = await Promise.all([
+        DB.getUsers(), DB.getEvents(), DB.getVolunteers(), DB.getQrHistory(), DB.getDonGoal()
+      ]);
+      setUsers(us);
+      if (evs.length > 0) setEvents(evs);
+      else { setEvents(defaultEvents); for(const e of defaultEvents) await DB.saveEvent(e); }
+      setVolunteers(vols);
+      setQrHistory(hist);
+      setDonGoal(goal);
+    };
+    loadData();
+    // Real-time listener for users
+    const unsub = DB.onUsers(us => setUsers(us));
+    return () => unsub();
   }, [tab]);
 
-  const saveUsers = u => { setUsers(u); localStorage.setItem("imb_users", JSON.stringify(u)); };
-  const saveEvents = e => { setEvents(e); localStorage.setItem("imb_events", JSON.stringify(e)); };
+  const saveUsers = async u => { setUsers(u); for(const user of u) await DB.saveUser(user); };
+  const saveEvents = async e => { setEvents(e); for(const ev of e) await DB.saveEvent(ev); };
 
-  const approveUser = (id) => {
-    const updated = users.map(u => u.id===id ? {...u, status:"approved"} : u);
-    saveUsers(updated);
-    // Simular notificação por email
+  const approveUser = async (id) => {
+    await DB.updateUser(id, { status:"approved" });
+    setUsers(prev => prev.map(u => u.id===id ? {...u, status:"approved"} : u));
     const u = users.find(u => u.id===id);
-    toast(`✅ ${u?.name} aprovado! E-mail de notificação enviado.`, "success");
+    toast(`✅ ${u?.name} aprovado!`, "success");
   };
-  const rejectUser = (id) => {
-    const updated = users.map(u => u.id===id ? {...u, status:"rejected"} : u);
-    saveUsers(updated);
+  const rejectUser = async (id) => {
+    await DB.updateUser(id, { status:"rejected" });
+    setUsers(prev => prev.map(u => u.id===id ? {...u, status:"rejected"} : u));
     toast("Cadastro rejeitado","error");
   };
 
-  const assignQR = (userId, eventId) => {
+  const assignQR = async (userId, eventId) => {
     const u = users.find(u => u.id===userId);
     if (!u) return;
     const token = Date.now().toString(36).toUpperCase();
     const qrVal = `IMB-${eventId.toUpperCase()}-${userId}-${token}`;
-    const updated = users.map(user => user.id===userId ? {
-      ...user, qrCodes: { ...(user.qrCodes||{}), [eventId]: qrVal }
-    } : user);
-    saveUsers(updated);
+    const newQrCodes = { ...(u.qrCodes||{}), [eventId]: qrVal };
+    await DB.updateUser(userId, { qrCodes: newQrCodes });
+    setUsers(prev => prev.map(user => user.id===userId ? { ...user, qrCodes: newQrCodes } : user));
     toast(`QR Code gerado para ${u.name}`, "success");
   };
 
-  const validateQR = (code) => {
+  const validateQR = async (code) => {
     if (!code.startsWith("IMB-")) { setQrResult({ ok:false, msg:"QR Code inválido" }); return; }
     const parts = code.split("-");
     if (parts.length < 4) { setQrResult({ ok:false, msg:"Formato inválido" }); return; }
     const eventId = parts[1].toLowerCase();
     const userId = parts[2];
-    const users2 = JSON.parse(localStorage.getItem("imb_users")||"[]");
-    const u = users2.find(u => u.id===userId);
+    const allUsers = await DB.getUsers();
+    const u = allUsers.find(u => u.id===userId);
     if (!u) { setQrResult({ ok:false, msg:"Usuário não encontrado" }); return; }
     if (u.qrCodes?.[eventId] !== code) { setQrResult({ ok:false, msg:"QR Code não corresponde" }); return; }
     if (u.usedQrCodes?.[eventId]) { setQrResult({ ok:false, msg:`Já utilizado em ${u.usedQrCodes[eventId]}`, user:u }); return; }
@@ -1275,16 +1321,15 @@ function Admin({ go, logout, toast }) {
     setQrResult({ ok:true, user:u, event:ev, code, eventId });
   };
 
-  const confirmDelivery = () => {
+  const confirmDelivery = async () => {
     if (!qrResult?.ok) return;
     const ts = new Date().toLocaleString("pt-BR");
-    const updated = users.map(u => u.id===qrResult.user.id ? {
-      ...u, usedQrCodes: { ...(u.usedQrCodes||{}), [qrResult.eventId]: ts }
-    } : u);
-    saveUsers(updated);
-    const hist = [...qrHistory, { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts }];
-    setQrHistory(hist);
-    localStorage.setItem("imb_qr_history", JSON.stringify(hist));
+    const newUsedQr = { ...(qrResult.user.usedQrCodes||{}), [qrResult.eventId]: ts };
+    await DB.updateUser(qrResult.user.id, { usedQrCodes: newUsedQr });
+    setUsers(prev => prev.map(u => u.id===qrResult.user.id ? { ...u, usedQrCodes: newUsedQr } : u));
+    const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts };
+    await DB.saveQrHistory(histEntry);
+    setQrHistory(prev => [...prev, histEntry]);
     toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
     setQrResult(null); setQrInput("");
   };
@@ -1555,10 +1600,8 @@ function Admin({ go, logout, toast }) {
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
                       <span style={{fontSize:13,color:"#64748b"}}>{assigned.length}/{eligible.length} atribuídos</span>
-                      <button className="btn btn-blue btn-sm" onClick={() => {
-                        eligible.forEach(u => { if (!u.qrCodes?.[ev.id]) assignQR(u.id, ev.id); });
-                        const u2 = JSON.parse(localStorage.getItem("imb_users")||"[]");
-                        setUsers(u2);
+                      <button className="btn btn-blue btn-sm" onClick={async () => {
+                        for (const u of eligible) { if (!u.qrCodes?.[ev.id]) await assignQR(u.id, ev.id); }
                         toast(`QR Codes gerados para todos os aprovados de ${ev.label}!`, "success");
                       }}>⚡ Gerar para Todos</button>
                     </div>
@@ -1578,7 +1621,7 @@ function Admin({ go, logout, toast }) {
                             <td style={{fontSize:11,color:"#94a3b8",fontFamily:"monospace"}}>{u.qrCodes?.[ev.id]?.slice(0,24)+"..." || "-"}</td>
                             <td><span className={`badge badge-${used?"green":hasQr?"blue":"gray"}`}>{used?"Utilizado":hasQr?"Atribuído":"Sem QR"}</span></td>
                             <td>
-                              {!hasQr && <button className="btn btn-gold btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={() => { assignQR(u.id, ev.id); const u2=JSON.parse(localStorage.getItem("imb_users")||"[]"); setUsers(u2); }}>Gerar QR</button>}
+                              {!hasQr && <button className="btn btn-gold btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={() => assignQR(u.id, ev.id)}>Gerar QR</button>}
                             </td>
                           </tr>
                         );
