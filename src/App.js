@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, updateEmail, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -57,41 +57,49 @@ const uploadDocumento = async (userId, tipo, file, onProgress) => {
   });
 };
 
-// ─── BRUTE FORCE PROTECTION ──────────────────────────────────────────────────
+// ─── BRUTE FORCE PROTECTION (persistido no Firestore) ────────────────────────
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutos
 
-const loginAttempts = {}; // { email: { count, firstAt } }
+// Cache local para evitar excesso de leituras no Firestore
+const _bfCache = {};
 
-const checkBruteForce = (email) => {
+const _bfDoc = (email) => doc(db, "security", `bf_${email.toLowerCase().replace(/[^a-z0-9]/g,"_")}`);
+
+const checkBruteForce = async (email) => {
   const key = email.toLowerCase();
   const now = Date.now();
-  const rec = loginAttempts[key];
-  if (!rec) return { blocked: false };
-  // Reset se passou o tempo de bloqueio
-  if (now - rec.firstAt > LOCKOUT_MS) {
-    delete loginAttempts[key];
+  try {
+    const d = await getDoc(_bfDoc(email));
+    if (!d.exists()) return { blocked: false };
+    const rec = d.data();
+    if (now - rec.firstAt > LOCKOUT_MS) {
+      await deleteDoc(_bfDoc(email)); // limpa registro expirado
+      return { blocked: false };
+    }
+    if (rec.count >= MAX_ATTEMPTS) {
+      const remaining = Math.ceil((LOCKOUT_MS - (now - rec.firstAt)) / 60000);
+      return { blocked: true, remaining };
+    }
+    _bfCache[key] = rec;
     return { blocked: false };
-  }
-  if (rec.count >= MAX_ATTEMPTS) {
-    const remaining = Math.ceil((LOCKOUT_MS - (now - rec.firstAt)) / 60000);
-    return { blocked: true, remaining };
-  }
-  return { blocked: false };
+  } catch(e) { return { blocked: false }; }
 };
 
-const registerFailedAttempt = (email) => {
-  const key = email.toLowerCase();
+const registerFailedAttempt = async (email) => {
   const now = Date.now();
-  if (!loginAttempts[key] || (now - loginAttempts[key].firstAt > LOCKOUT_MS)) {
-    loginAttempts[key] = { count: 1, firstAt: now };
-  } else {
-    loginAttempts[key].count++;
-  }
+  try {
+    const d = await getDoc(_bfDoc(email));
+    if (!d.exists() || (now - d.data().firstAt > LOCKOUT_MS)) {
+      await setDoc(_bfDoc(email), { count: 1, firstAt: now });
+    } else {
+      await setDoc(_bfDoc(email), { count: d.data().count + 1, firstAt: d.data().firstAt });
+    }
+  } catch(e) { console.warn("BF register:", e); }
 };
 
-const clearAttempts = (email) => {
-  delete loginAttempts[email.toLowerCase()];
+const clearAttempts = async (email) => {
+  try { await deleteDoc(_bfDoc(email)); } catch(e) {}
 };
 const DB = {
   async getUsers() { const s = await getDocs(collection(db,"users")); return s.docs.map(d=>({...d.data(),id:d.id})); },
@@ -104,6 +112,7 @@ const DB = {
   async saveVolunteer(v) { await addDoc(collection(db,"volunteers"),v); },
   async getQrHistory() { const s = await getDocs(collection(db,"qr_history")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveQrHistory(h) { await addDoc(collection(db,"qr_history"),h); },
+  async saveAuditLog(entry) { await addDoc(collection(db,"audit_logs"), { ...entry, ts: new Date().toLocaleString("pt-BR"), tsMs: Date.now() }); },
   async getDonGoal() { const d = await getDoc(doc(db,"settings","donation_goal")); return d.exists()?d.data():{ current:3200,target:5000,label:"Meta de Natal 2025",currency:"R$" }; },
   async saveDonGoal(g) { await setDoc(doc(db,"settings","donation_goal"),g); },
   async getCollaborators() { const s = await getDocs(collection(db,"collaborators")); return s.docs.map(d=>({...d.data(),id:d.id})); },
@@ -150,8 +159,11 @@ const DB = {
   // ── Site settings (YouTube, Cloudinary, etc.)
   async getSiteSettings() { const d = await getDoc(doc(db,"settings","site")); return d.exists()?d.data():{ youtubeId:"dQw4w9WgXcQ", cloudinaryCloud:"", cloudinaryPreset:"" }; },
   async saveSiteSettings(s) { await setDoc(doc(db,"settings","site"), s, { merge: true }); },
-  async getSuperAdminCreds() { const d = await getDoc(doc(db,"settings","super_admin")); return d.exists()?d.data():{ email:"admin@marildabrandao.org.br", password:"admin123" }; },
-  async saveSuperAdminCreds(c) { await setDoc(doc(db,"settings","super_admin"), c, { merge: true }); },
+  async getSuperAdminCreds() { const d = await getDoc(doc(db,"settings","super_admin")); return d.exists()?d.data():{ email:"admin@marildabrandao.org.br" }; },
+  async saveSuperAdminCreds(c) {
+    // Salva SOMENTE o email no Firestore — senha fica exclusivamente no Firebase Auth
+    await setDoc(doc(db,"settings","super_admin"), { email: c.email }, { merge: true });
+  },
   // EmailJS — usa chaves salvas no Firestore (settings/site)
   async sendEmail(to, subject, body) {
     try {
@@ -1146,6 +1158,19 @@ function Register({ go, toast }) {
   const handleSubmit = async () => {
     if (!lgpd) { toast("Aceite o termo de consentimento LGPD","error"); return; }
     if (!docs.rg || !docs.cpf || !docs.comprovante) { toast("Envie os documentos obrigatórios (RG, CPF, Comprovante)","error"); return; }
+
+    // Rate limit: máximo 3 cadastros por IP (por hora) — via Firestore
+    try {
+      const ipKey = `reg_${btoa(f.email).slice(0,20).replace(/[^A-Za-z0-9]/g,"_")}`;
+      const rlDoc = await getDoc(doc(db,"security",ipKey));
+      if (rlDoc.exists()) {
+        const d = rlDoc.data();
+        if (Date.now() - d.firstAt < 3600000 && d.count >= 3) {
+          toast("Muitos cadastros em pouco tempo. Tente novamente em 1 hora.","error"); return;
+        }
+      }
+    } catch(e) { console.warn("Rate limit check:", e); }
+
     const users = await DB.getUsers();
     if (users.find(u => u.email === f.email)) { toast("E-mail já cadastrado","error"); return; }
 
@@ -1200,6 +1225,17 @@ function Register({ go, toast }) {
         lgpdDate: new Date().toLocaleString("pt-BR"),
       };
       await DB.saveUser(newUser);
+      // Incrementa rate limit counter
+      try {
+        const ipKey = `reg_${btoa(f.email).slice(0,20).replace(/[^A-Za-z0-9]/g,"_")}`;
+        const rlDoc = await getDoc(doc(db,"security",ipKey));
+        const now = Date.now();
+        if (!rlDoc.exists() || now - rlDoc.data().firstAt >= 3600000) {
+          await setDoc(doc(db,"security",ipKey), { count:1, firstAt:now });
+        } else {
+          await setDoc(doc(db,"security",ipKey), { count: rlDoc.data().count+1, firstAt: rlDoc.data().firstAt });
+        }
+      } catch(e) {}
       setStep(3);
     } catch(err) {
       toast("Erro no envio: " + (err.message||"tente novamente"), "error");
@@ -1420,41 +1456,34 @@ function Login({ go, onLogin, toast }) {
     if (!email || !pw) { toast("Preencha e-mail e senha","error"); return; }
 
     // ── Brute force check ──
-    const bf = checkBruteForce(email);
+    const bf = await checkBruteForce(email);
     if (bf.blocked) {
       toast(`🔒 Muitas tentativas. Tente novamente em ${bf.remaining} min.`,"error"); return;
     }
 
     try {
-      // Super admin — verifica Firestore
-      const superCreds = await DB.getSuperAdminCreds();
-      if (email === superCreds.email) {
-        if (pw !== superCreds.password) {
-          registerFailedAttempt(email);
-          toast("Senha incorreta","error"); return;
-        }
-        await ensureFirebaseAuth(email, pw);
-        clearAttempts(email);
-        onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
-      }
-
-      // Autentica pelo Firebase Auth
+      // Autentica TODOS via Firebase Auth (incluindo super admin — sem senha no Firestore)
       let fbUser;
       try {
         fbUser = await signInWithEmailAndPassword(auth, email, pw);
       } catch(e) {
-        registerFailedAttempt(email);
-        const remaining = MAX_ATTEMPTS - (loginAttempts[email.toLowerCase()]?.count || 0);
-        if (remaining <= 2 && remaining > 0) {
-          toast(`Senha incorreta. ${remaining} tentativa(s) restante(s) antes do bloqueio.`,"error");
+        await registerFailedAttempt(email);
+        const d = await getDoc(_bfDoc(email)).catch(()=>null);
+        const left = MAX_ATTEMPTS - (d?.data()?.count || 0);
+        if (left <= 2 && left > 0) {
+          toast(`Senha incorreta. ${left} tentativa(s) restante(s) antes do bloqueio.`,"error");
         } else {
           toast("E-mail ou senha incorretos","error");
         }
         return;
       }
+      await clearAttempts(email);
 
-      // Credenciais válidas no Firebase Auth — busca perfil no Firestore
-      clearAttempts(email);
+      // Verifica se é super admin pelo email (apenas email — sem senha no Firestore)
+      const superCreds = await DB.getSuperAdminCreds();
+      if (email === superCreds.email) {
+        onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
+      }
 
       // Verifica se é admin cadastrado
       const admins = await DB.getAdmins();
@@ -1815,6 +1844,17 @@ function CollaboratorRegister({ go, toast }) {
   const handleSubmit = async () => {
     if (!f.name||!f.email||!f.password) { toast("Preencha todos os campos obrigatórios","error"); return; }
     if (f.password !== f.confirm) { toast("Senhas não conferem","error"); return; }
+    // Rate limit cadastros
+    try {
+      const ipKey = `reg_${btoa(f.email).slice(0,20).replace(/[^A-Za-z0-9]/g,"_")}`;
+      const rlDoc = await getDoc(doc(db,"security",ipKey));
+      if (rlDoc.exists()) {
+        const d = rlDoc.data();
+        if (Date.now() - d.firstAt < 3600000 && d.count >= 3) {
+          toast("Muitos cadastros em pouco tempo. Tente novamente em 1 hora.","error"); return;
+        }
+      }
+    } catch(e) {}
     const cols = await DB.getCollaborators();
     if (cols.find(c => c.email===f.email)) { toast("E-mail já cadastrado","error"); return; }
     // Cria no Firebase Auth primeiro
@@ -2626,15 +2666,30 @@ function Admin({ go, logout, toast, adminUser }) {
       window.open(`https://wa.me/55${phone}?text=${msg}`, "_blank");
     }
   };
-  const exportCSV = (data, filename) => {
+  const exportCSV = async (data, filename, label="dados") => {
     if (!data.length) { toast("Nenhum dado para exportar","error"); return; }
-    const keys = Object.keys(data[0]).filter(k => !["password","id"].includes(k));
+    // Confirmação explícita antes de exportar dados sensíveis
+    const confirm = window.confirm(
+      `⚠️ Exportar ${data.length} registro(s) de ${label} para CSV?\n\nEsta ação será registrada no log de auditoria.`
+    );
+    if (!confirm) return;
+    // Remove campos sensíveis da exportação
+    const BLOCKED = ["password","authUid","qrCodes","usedQrCodes"];
+    const keys = Object.keys(data[0]).filter(k => !BLOCKED.includes(k));
     const csv = [keys.join(";"), ...data.map(row => keys.map(k => `"${String(row[k]||"").replace(/"/g,'""')}"`).join(";"))].join("\n");
     const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href=url; a.download=filename; a.click();
     URL.revokeObjectURL(url);
-    toast("✅ CSV exportado!","success");
+    // Registra no log de auditoria
+    await DB.saveAuditLog({
+      action: "export_csv",
+      filename,
+      records: data.length,
+      fields: keys.join(", "),
+      adminEmail: adminUser?.email || "desconhecido"
+    });
+    toast("✅ CSV exportado e registrado no log de auditoria","success");
   };
 
   const rejectUser = async (id) => {
@@ -2646,7 +2701,10 @@ function Admin({ go, logout, toast, adminUser }) {
   const assignQR = async (userId, eventId) => {
     const u = users.find(u => u.id===userId);
     if (!u) return;
-    const token = Date.now().toString(36).toUpperCase();
+    // Token criptograficamente seguro e imprevisível
+    const token = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID().replace(/-/g,"").toUpperCase().slice(0,16)
+      : Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b=>b.toString(16).padStart(2,"0")).join("").toUpperCase();
     const qrVal = `IMB-${eventId.toUpperCase()}-${userId}-${token}`;
     const newQrCodes = { ...(u.qrCodes||{}), [eventId]: qrVal };
     await DB.updateUser(userId, { qrCodes: newQrCodes });
@@ -2732,13 +2790,16 @@ function Admin({ go, logout, toast, adminUser }) {
   };
 
   // PDF Report
+  // Sanitiza strings para uso em HTML (previne XSS)
+  const esc = (s) => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
   const printReport = (eventId) => {
     const ev = events.find(e => e.id===eventId);
     const recipients = users.filter(u => u.usedQrCodes?.[eventId]);
     const pending = users.filter(u => u.qrCodes?.[eventId] && !u.usedQrCodes?.[eventId]);
     const win = window.open("","_blank");
     win.document.write(`
-      <html><head><title>Relatório - ${ev?.label}</title>
+      <html><head><title>Relatório - ${esc(ev?.label)}</title>
       <style>body{font-family:Arial,sans-serif;padding:24px;color:#1e293b}
         h1{color:#0a2d6e}table{width:100%;border-collapse:collapse;margin-top:16px}
         th{background:#0a2d6e;color:#fff;padding:8px 12px;text-align:left}
@@ -2747,17 +2808,17 @@ function Admin({ go, logout, toast, adminUser }) {
         .ok{background:#dcfce7;color:#166534}.pend{background:#fef9c3;color:#854d0e}
         @media print{button{display:none}}</style></head>
       <body>
-        <h1>${ev?.icon} Relatório: ${ev?.label}</h1>
+        <h1>${esc(ev?.icon)} Relatório: ${esc(ev?.label)}</h1>
         <p>Data do evento: ${ev ? new Date(ev.date).toLocaleDateString("pt-BR") : "-"} | Gerado em: ${new Date().toLocaleString("pt-BR")}</p>
         <p><strong>Total com QR:</strong> ${recipients.length + pending.length} | <strong>Retirados:</strong> ${recipients.length} | <strong>Pendentes:</strong> ${pending.length}</p>
         <button onclick="window.print()" style="padding:8px 16px;background:#0a2d6e;color:#fff;border:none;border-radius:6px;cursor:pointer;margin:12px 0">🖨️ Imprimir / Salvar PDF</button>
         <h2>✅ Confirmados (${recipients.length})</h2>
         <table><thead><tr><th>Nome</th><th>Cidade</th><th>Crianças</th><th>Data/Hora</th></tr></thead><tbody>
-          ${recipients.map(u=>`<tr><td>${u.name}</td><td>${u.city||"-"}</td><td>${u.children||0}</td><td class="badge ok">${u.usedQrCodes[eventId]}</td></tr>`).join("")}
+          ${recipients.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.city)||"-"}</td><td>${esc(u.children)||0}</td><td class="badge ok">${esc(u.usedQrCodes[eventId])}</td></tr>`).join("")}
         </tbody></table>
         <h2>⏳ Pendentes (${pending.length})</h2>
         <table><thead><tr><th>Nome</th><th>Telefone</th><th>Cidade</th></tr></thead><tbody>
-          ${pending.map(u=>`<tr><td>${u.name}</td><td>${u.phone||"-"}</td><td>${u.city||"-"}</td></tr>`).join("")}
+          ${pending.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.phone)||"-"}</td><td>${esc(u.city)||"-"}</td></tr>`).join("")}
         </tbody></table>
       </body></html>
     `);
@@ -2833,7 +2894,7 @@ function Admin({ go, logout, toast, adminUser }) {
               <select className="form-select" style={{width:"auto"}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
                 <option value="all">Todos</option><option value="pending">Pendentes</option><option value="approved">Aprovados</option><option value="rejected">Rejeitados</option>
               </select>
-              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(filtered.map(({password,...u})=>u), "cadastros.csv")}>📤 Exportar CSV</button>
+              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(filtered.map(({password,authUid,...u})=>u), "cadastros.csv", "cadastros de famílias")}>📤 Exportar CSV</button>
             </div>
             <div className="card" style={{overflow:"hidden"}}>
               <table className="tbl">
@@ -3169,7 +3230,7 @@ function Admin({ go, logout, toast, adminUser }) {
                 <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>💰 Controle de Doações</h1>
                 <p style={{color:"#64748b"}}>{donations.length} doação(ões) registrada(s)</p>
               </div>
-              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(donations,"doacoes.csv")}>📤 Exportar CSV</button>
+              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(donations,"doacoes.csv","doações")}>📤 Exportar CSV</button>
             </div>
             {/* Summary cards */}
             {(() => {
@@ -3399,7 +3460,7 @@ function Admin({ go, logout, toast, adminUser }) {
               })()}
               <button className="btn btn-blue btn-sm" style={{marginTop:16}} onClick={() => {
                 const data = users.filter(u=>u.status==="approved"&&u.city).map(u=>({nome:u.name,cidade:u.city,criancas:u.children||0}));
-                exportCSV(data,"distribuicao-cidades.csv");
+                exportCSV(data,"distribuicao-cidades.csv","distribuição por cidades");
               }}>📤 Exportar por Cidade</button>
             </div>
 
@@ -3442,7 +3503,7 @@ function Admin({ go, logout, toast, adminUser }) {
                     </div>
                     <button className="btn btn-blue btn-sm" onClick={() => {
                       const data = users.filter(u=>u.status==="approved"&&u.neighborhood).map(u=>({nome:u.name,bairro:u.neighborhood,cidade:u.city||"",criancas:u.children||0}));
-                      exportCSV(data,"mapa-bairros.csv");
+                      exportCSV(data,"mapa-bairros.csv","mapa de bairros");
                     }}>📤 Exportar por Bairro</button>
                   </>
                 );
@@ -3549,12 +3610,17 @@ function Admin({ go, logout, toast, adminUser }) {
                 if (newCreds.password && newCreds.password !== newCreds.confirm) { toast("As senhas não coincidem","error"); return; }
                 if (newCreds.password && newCreds.password.length < 6) { toast("Senha deve ter ao menos 6 caracteres","error"); return; }
                 try {
-                  // Busca senha atual do Firestore caso state esteja vazio
-                  const current = await DB.getSuperAdminCreds();
-                  const updated = {
-                    email: newCreds.email,
-                    password: newCreds.password || current.password
-                  };
+                  const currentUser = auth.currentUser;
+                  // Atualiza email no Firebase Auth se mudou
+                  if (newCreds.email && newCreds.email !== superCreds.email) {
+                    await updateEmail(currentUser, newCreds.email);
+                  }
+                  // Atualiza senha no Firebase Auth se fornecida
+                  if (newCreds.password) {
+                    await updatePassword(currentUser, newCreds.password);
+                  }
+                  // Salva apenas email no Firestore (sem senha)
+                  const updated = { email: newCreds.email || superCreds.email };
                   await DB.saveSuperAdminCreds(updated);
                   setSuperCreds(updated);
                   setNewCreds({ email: updated.email, password:"", confirm:"" });
@@ -3578,7 +3644,13 @@ function Admin({ go, logout, toast, adminUser }) {
                   </div>
                 </div>
                 <button className="btn btn-gold" style={{marginBottom:0}} onClick={async () => {
-                  await DB.saveSiteSettings({ youtubeId: siteSettings.youtubeId||"" });
+                  // Valida formato do YouTube ID: apenas letras, números, - e _
+                  const ytId = (siteSettings.youtubeId||"").trim().replace(/[^A-Za-z0-9_-]/g,"");
+                  if (siteSettings.youtubeId && ytId !== siteSettings.youtubeId.trim()) {
+                    toast("⚠️ ID do YouTube contém caracteres inválidos — corrigido automaticamente","error");
+                  }
+                  await DB.saveSiteSettings({ youtubeId: ytId });
+                  setSiteSettings({...siteSettings, youtubeId: ytId});
                   toast("🎬 Vídeo atualizado!", "success");
                 }}>Salvar</button>
               </div>
@@ -3620,7 +3692,12 @@ function Admin({ go, logout, toast, adminUser }) {
               <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
                 <button className="btn btn-gold" onClick={async () => {
                   if (!siteSettings.cloudinaryCloud || !siteSettings.cloudinaryPreset) { toast("Preencha Cloud Name e Upload Preset","error"); return; }
-                  await DB.saveSiteSettings({ cloudinaryCloud: siteSettings.cloudinaryCloud, cloudinaryPreset: siteSettings.cloudinaryPreset });
+                  // Valida formato: apenas alfanumérico, hífens e underscores
+                  const cloudName = siteSettings.cloudinaryCloud.trim().replace(/[^A-Za-z0-9_-]/g,"");
+                  const preset = siteSettings.cloudinaryPreset.trim().replace(/[^A-Za-z0-9_-]/g,"");
+                  if (!cloudName || !preset) { toast("Valores inválidos para Cloud Name ou Preset","error"); return; }
+                  await DB.saveSiteSettings({ cloudinaryCloud: cloudName, cloudinaryPreset: preset });
+                  setSiteSettings({...siteSettings, cloudinaryCloud: cloudName, cloudinaryPreset: preset});
                   toast("☁️ Cloudinary configurado!", "success");
                 }}>Salvar</button>
                 {siteSettings.cloudinaryCloud && siteSettings.cloudinaryPreset && (
@@ -3936,7 +4013,8 @@ export default function App() {
       {page==="login" && <Login go={setPage} onLogin={setUser} toast={toast} />}
       {page==="dashboard" && user && <Dashboard user={user} go={setPage} logout={logout} />}
       {page==="collaborator" && user && <CollaboratorDashboard user={user} go={setPage} logout={logout} toast={toast} />}
-      {page==="admin" && <Admin go={setPage} logout={logout} toast={toast} adminUser={user} />}
+      {page==="admin" && user && user.role==="admin" && <Admin go={setPage} logout={logout} toast={toast} adminUser={user} />}
+      {page==="admin" && (!user || user.role!=="admin") && (() => { setPage("login"); return null; })()}
     </>
   );
 }
