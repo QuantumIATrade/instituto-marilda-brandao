@@ -640,7 +640,7 @@ function VolunteerModal({ onClose, toast }) {
         </div>
         <div className="form-group">
           <label className="form-label">Mensagem (opcional)</label>
-          <textarea className="form-input" rows={3} value={form.message} onChange={e =maxLength={1000}> setForm({...form,message:e.target.value})} placeholder="Conte um pouco sobre você e sua experiência..." />
+          <textarea className="form-input" rows={3} value={form.message} maxLength={1000} onChange={e => setForm({...form,message:e.target.value})} placeholder="Conte um pouco sobre você e sua experiência..." />
         </div>
         <div style={{display:"flex",gap:12}}>
           <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={handleSubmit}>Enviar Inscrição</button>
@@ -2311,11 +2311,11 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Parágrafo 1 — História / Origem</label>
-                <textarea style={textareaStyle} value={siteText.sobre_texto1||""} onChange={e=maxLength={1000}>setSiteText({...siteText,sobre_texto1:e.target.value})} placeholder="Conte a história do Instituto..." />
+                <textarea style={textareaStyle} value={siteText.sobre_texto1||""} maxLength={1000} onChange={e =>setSiteText({...siteText,sobre_texto1:e.target.value})} placeholder="Conte a história do Instituto..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Parágrafo 2 — Missão / Valores</label>
-                <textarea style={textareaStyle} value={siteText.sobre_texto2||""} onChange={e=maxLength={1000}>setSiteText({...siteText,sobre_texto2:e.target.value})} placeholder="Descreva a missão e valores..." />
+                <textarea style={textareaStyle} value={siteText.sobre_texto2||""} maxLength={1000} onChange={e =>setSiteText({...siteText,sobre_texto2:e.target.value})} placeholder="Descreva a missão e valores..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">URL da Foto (seção Sobre)</label>
@@ -2338,11 +2338,11 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Texto descritivo ao lado do vídeo</label>
-                <textarea style={textareaStyle} value={siteText.video_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,video_texto:e.target.value})} placeholder="Texto que aparece ao lado do vídeo..." />
+                <textarea style={textareaStyle} value={siteText.video_texto||""} maxLength={1000} onChange={e =>setSiteText({...siteText,video_texto:e.target.value})} placeholder="Texto que aparece ao lado do vídeo..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Itens de destaque (um por linha)</label>
-                <textarea style={{...textareaStyle,minHeight:80}} value={siteText.video_itens||""} onChange={e=maxLength={1000}>setSiteText({...siteText,video_itens:e.target.value})} placeholder={"Mais de 10 anos de história\nAtuação em comunidades vulneráveis\nProjetos reconhecidos pelo poder público"} />
+                <textarea style={{...textareaStyle,minHeight:80}} value={siteText.video_itens||""} maxLength={1000} onChange={e =>setSiteText({...siteText,video_itens:e.target.value})} placeholder={"Mais de 10 anos de história\nAtuação em comunidades vulneráveis\nProjetos reconhecidos pelo poder público"} />
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Cada linha vira um item com ✓ na lista</div>
               </div>
             </div>
@@ -2361,7 +2361,7 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Texto de compromisso de transparência</label>
-                <textarea style={textareaStyle} value={siteText.transparencia_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,transparencia_texto:e.target.value})} placeholder="🔒 Compromisso de Transparência: ..." />
+                <textarea style={textareaStyle} value={siteText.transparencia_texto||""} maxLength={1000} onChange={e =>setSiteText({...siteText,transparencia_texto:e.target.value})} placeholder="🔒 Compromisso de Transparência: ..." />
               </div>
             </div>
           </div>
@@ -2390,7 +2390,7 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Depoimento *</label>
-                <textarea style={textareaStyle} value={depForm.text} onChange={e=maxLength={1000}>setDepForm({...depForm,text:e.target.value})} placeholder="Digite o depoimento..." />
+                <textarea style={textareaStyle} value={depForm.text} maxLength={1000} onChange={e =>setDepForm({...depForm,text:e.target.value})} placeholder="Digite o depoimento..." />
               </div>
               <div className="form-group">
                 <label className="form-label">Emoji Avatar (se não tiver foto)</label>
@@ -2563,7 +2563,7 @@ function TabConteudo({ toast }) {
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
               <div className="form-group">
                 <label className="form-label">Texto descritivo no rodapé</label>
-                <textarea style={textareaStyle} value={siteText.footer_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,footer_texto:e.target.value})} placeholder="Breve descrição do Instituto para o rodapé..." />
+                <textarea style={textareaStyle} value={siteText.footer_texto||""} maxLength={1000} onChange={e =>setSiteText({...siteText,footer_texto:e.target.value})} placeholder="Breve descrição do Instituto para o rodapé..." />
               </div>
               <div className="form-group">
                 <label className="form-label">Texto de direitos / copyright</label>
@@ -3360,7 +3360,7 @@ function Admin({ go, logout, toast, adminUser }) {
               <div className="form-group"><label className="form-label">Título *</label>
                 <input className="form-input" value={newAnnouncement.title} onChange={e=>setNewAnnouncement({...newAnnouncement,title:e.target.value})} placeholder="Ex: Distribuição de cestas em 15/01" /></div>
               <div className="form-group"><label className="form-label">Mensagem *</label>
-                <textarea className="form-input" rows={3} value={newAnnouncement.body} onChange={e=maxLength={1000}>setNewAnnouncement({...newAnnouncement,body:e.target.value})} placeholder="Detalhes do aviso..." style={{resize:"vertical"}} /></div>
+                <textarea className="form-input" rows={3} value={newAnnouncement.body} maxLength={1000} onChange={e =>setNewAnnouncement({...newAnnouncement,body:e.target.value})} placeholder="Detalhes do aviso..." style={{resize:"vertical"}} /></div>
               <div className="grid-2">
                 <div className="form-group"><label className="form-label">Prioridade</label>
                   <select className="form-select" value={newAnnouncement.priority} onChange={e=>setNewAnnouncement({...newAnnouncement,priority:e.target.value})}>
