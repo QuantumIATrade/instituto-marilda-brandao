@@ -2781,7 +2781,6 @@ function Admin({ go, logout, toast, adminUser }) {
       toast("❌ " + e.message, "error");
     }
   };
-  };
 
   // Camera QR scanning
   const scanningRef = useRef(false);
