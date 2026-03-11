@@ -1278,9 +1278,9 @@ function Admin({ go, logout, toast }) {
     // Real-time listener for users
     const unsub = DB.onUsers(us => setUsers(us));
     return () => unsub();
-  }, [tab]);
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveUsers = async u => { setUsers(u); for(const user of u) await DB.saveUser(user); };
+  // saveEvents kept for event CRUD operations
   const saveEvents = async e => { setEvents(e); for(const ev of e) await DB.saveEvent(ev); };
 
   const approveUser = async (id) => {
