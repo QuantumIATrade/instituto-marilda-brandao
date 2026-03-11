@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -15,6 +15,18 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
 const storage = getStorage(fbApp);
+
+// ── Upload seguro para Firebase Storage (documentos privados)
+const uploadDocumento = (userId, tipo, file, onProgress) => new Promise((resolve, reject) => {
+  const path = `documentos/${userId}/${tipo}_${Date.now()}.${file.name.split(".").pop()}`;
+  const storageRef = ref(storage, path);
+  const task = uploadBytesResumable(storageRef, file);
+  task.on("state_changed",
+    snap => onProgress && onProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)),
+    reject,
+    async () => { const url = await getDownloadURL(task.snapshot.ref); resolve({ url, path }); }
+  );
+});
 
 // ─── DB HELPERS ──────────────────────────────────────────────────────────────
 const DB = {
@@ -33,19 +45,36 @@ const DB = {
   async getCollaborators() { const s = await getDocs(collection(db,"collaborators")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveCollaborator(c) { const {id,...data}=c; await setDoc(doc(db,"collaborators",id),data); },
   async updateCollaborator(id,data) { await updateDoc(doc(db,"collaborators",id),data); },
+  async getUserDocs(userId) { const s = await getDocs(collection(db,`docs_${userId}`)); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveUserDoc(userId, d) { return await addDoc(collection(db,`docs_${userId}`),d); },
+  async deleteUserDoc(userId, docId) { await deleteDoc(doc(db,`docs_${userId}`,docId)); },
   async getDonations() { const s = await getDocs(collection(db,"donations")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveDonation(d) { await addDoc(collection(db,"donations"),d); },
   async deleteDonation(id) { await deleteDoc(doc(db,"donations",id)); },
   async getAnnouncements() { const s = await getDocs(collection(db,"announcements")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveAnnouncement(a) { const {id,...data}=a; await setDoc(doc(db,"announcements",id),data); },
   async deleteAnnouncement(id) { await deleteDoc(doc(db,"announcements",id)); },
-  async uploadEventPhoto(eventId, file) {
-    const r = ref(storage, `events/${eventId}/${Date.now()}_${file.name}`);
-    const snap = await uploadBytes(r, file);
-    return await getDownloadURL(snap.ref);
+  // ── Cloudinary upload (configure CLOUDINARY_CLOUD_NAME e UPLOAD_PRESET no painel admin)
+  async uploadToCloudinary(file, type="image") {
+    const settings = await this.getSiteSettings();
+    const cloudName = settings.cloudinaryCloud || "";
+    const preset = settings.cloudinaryPreset || "";
+    if (!cloudName || !preset) throw new Error("Configure o Cloudinary no painel admin (Configurações)");
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", preset);
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${type}/upload`, { method:"POST", body:fd });
+    if (!res.ok) throw new Error("Falha no upload ao Cloudinary");
+    const json = await res.json();
+    return json.secure_url;
   },
+  async uploadEventPhoto(eventId, file) { return this.uploadToCloudinary(file, "image"); },
   async getEventPhotos(eventId) { const s = await getDocs(collection(db,`event_photos_${eventId}`)); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveEventPhoto(eventId, p) { await addDoc(collection(db,`event_photos_${eventId}`),p); },
+  async deleteEventPhoto(eventId, docId) { await deleteDoc(doc(db,`event_photos_${eventId}`,docId)); },
+  // ── Site settings (YouTube, Cloudinary, etc.)
+  async getSiteSettings() { const d = await getDoc(doc(db,"settings","site")); return d.exists()?d.data():{ youtubeId:"dQw4w9WgXcQ", cloudinaryCloud:"", cloudinaryPreset:"" }; },
+  async saveSiteSettings(s) { await setDoc(doc(db,"settings","site"),s); },
   // EmailJS (configure at emailjs.com)
   async sendEmail(to, subject, body) {
     try {
@@ -514,7 +543,11 @@ function Home({ go }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const showToast = (msg, type = "info") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3200); };
   const [donGoal, setDonGoal] = useState({ current:3200, target:5000, label:"Meta de Natal 2025", currency:"R$" });
-  useEffect(() => { DB.getDonGoal().then(g => setDonGoal(g)); }, []);
+  const [youtubeId, setYoutubeId] = useState("dQw4w9WgXcQ");
+  useEffect(() => {
+    DB.getDonGoal().then(g => setDonGoal(g));
+    DB.getSiteSettings().then(s => { if (s.youtubeId) setYoutubeId(s.youtubeId); });
+  }, []);
   const scrollTo = (id) => { document.getElementById(id)?.scrollIntoView({behavior:"smooth"}); setMenuOpen(false); };
   const programs = [
     { icon: "📚", title: "Reforço Escolar", desc: "Apoio pedagógico para crianças com dificuldades de aprendizado" },
@@ -695,16 +728,14 @@ function Home({ go }) {
             </div>
             <div>
               <div className="video-wrapper" style={{boxShadow:"0 20px 60px rgba(0,0,0,.5)"}}>
-                {/* Substitua pelo ID do seu vídeo do YouTube */}
                 <iframe
-                  src="https://www.youtube.com/embed/dQw4w9WgXcQ"
+                  src={`https://www.youtube.com/embed/${youtubeId}`}
                   title="Instituto Marilda Brandão - Vídeo Institucional"
                   frameBorder="0"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                 />
               </div>
-              <p style={{color:"rgba(255,255,255,.4)",fontSize:11,textAlign:"center",marginTop:8}}>* Substitua o ID do vídeo pelo seu vídeo no YouTube</p>
             </div>
           </div>
         </div>
@@ -964,19 +995,89 @@ function Home({ go }) {
 
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 function Register({ go, toast }) {
-  const [f, setF] = useState({ name:"",email:"",cpf:"",phone:"",birthdate:"",address:"",neighborhood:"",city:"",state:"",children:"0",childrenNames:"",reason:"",howKnew:"",photoUrl:"",password:"",confirm:"" });
+  const [f, setF] = useState({ name:"",email:"",cpf:"",phone:"",birthdate:"",address:"",neighborhood:"",city:"",state:"",children:"0",childrenNames:"",reason:"",howKnew:"",password:"",confirm:"" });
   const set = k => e => setF({...f,[k]:e.target.value});
-  const handleSubmit = async () => {
-    if (!f.name||!f.email||!f.password) { toast("Preencha todos os campos obrigatórios","error"); return; }
+  const [step, setStep] = useState(1); // 1=dados, 2=documentos, 3=confirmação
+  const [docs, setDocs] = useState({ rg:null, cpf:null, comprovante:null, certidao:null });
+  const [progress, setProgress] = useState({});
+  const [uploading, setUploading] = useState(false);
+  const [lgpd, setLgpd] = useState(false);
+
+  const docTypes = [
+    { key:"rg",          label:"RG do Responsável",          icon:"🪪", accept:"image/*,application/pdf", required:true },
+    { key:"cpf",         label:"CPF do Responsável",         icon:"📋", accept:"image/*,application/pdf", required:true },
+    { key:"comprovante", label:"Comprovante de Residência",  icon:"🏠", accept:"image/*,application/pdf", required:true },
+    { key:"certidao",    label:"Certidão de Nascimento (filhos)", icon:"👶", accept:"image/*,application/pdf", required:false },
+  ];
+
+  const handleStep1 = () => {
+    if (!f.name||!f.email||!f.password) { toast("Preencha nome, e-mail e senha","error"); return; }
     if (f.password !== f.confirm) { toast("Senhas não conferem","error"); return; }
+    setStep(2);
+  };
+
+  const handleFileSelect = (key, file) => {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { toast(`${key.toUpperCase()}: arquivo muito grande (máx 8MB)`,"error"); return; }
+    setDocs(prev => ({...prev, [key]: file}));
+  };
+
+  const handleSubmit = async () => {
+    if (!lgpd) { toast("Aceite o termo de consentimento LGPD","error"); return; }
+    if (!docs.rg || !docs.cpf || !docs.comprovante) { toast("Envie os documentos obrigatórios (RG, CPF, Comprovante)","error"); return; }
     const users = await DB.getUsers();
     if (users.find(u => u.email === f.email)) { toast("E-mail já cadastrado","error"); return; }
-    const newUser = { ...f, id:`U${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR"), qrCodes:{}, usedQrCodes:{} };
-    delete newUser.confirm;
-    await DB.saveUser(newUser);
-    toast("✓ Cadastro enviado! Aguarde aprovação.","success");
-    setTimeout(() => go("login"), 1500);
+
+    setUploading(true);
+    const userId = `U${Date.now()}`;
+    const docMeta = {};
+
+    try {
+      // Upload each document to Firebase Storage /documentos/{userId}/
+      for (const {key} of docTypes) {
+        if (!docs[key]) continue;
+        toast(`Enviando ${key.toUpperCase()}...`, "info");
+        const result = await uploadDocumento(userId, key, docs[key], pct => {
+          setProgress(prev => ({...prev, [key]: pct}));
+        });
+        // Save only path reference to Firestore — NOT the signed URL for security
+        await DB.saveUserDoc(userId, {
+          tipo: key,
+          path: result.path,
+          nome: docs[key].name,
+          tamanho: docs[key].size,
+          uploadedAt: new Date().toLocaleString("pt-BR"),
+        });
+        docMeta[key] = { path: result.path, nome: docs[key].name };
+      }
+
+      // Save user WITHOUT document URLs (only metadata)
+      const { confirm, ...userData } = f;
+      const newUser = {
+        ...userData,
+        id: userId,
+        status: "pending",
+        createdAt: new Date().toLocaleString("pt-BR"),
+        qrCodes: {},
+        usedQrCodes: {},
+        docsEnviados: Object.keys(docMeta),
+        lgpdConsent: true,
+        lgpdDate: new Date().toLocaleString("pt-BR"),
+      };
+      await DB.saveUser(newUser);
+      setStep(3);
+    } catch(err) {
+      toast("Erro no envio: " + (err.message||"tente novamente"), "error");
+    }
+    setUploading(false);
   };
+
+  const progressBar = (key) => progress[key] > 0 && progress[key] < 100 ? (
+    <div style={{marginTop:6,background:"#f1f5f9",borderRadius:999,height:6,overflow:"hidden"}}>
+      <div style={{background:"linear-gradient(90deg,var(--blue),var(--gold))",height:6,width:`${progress[key]}%`,transition:".2s"}} />
+    </div>
+  ) : null;
+
   return (
     <>
       <style>{CSS}</style>
@@ -986,68 +1087,166 @@ function Register({ go, toast }) {
             <IMBLogo variant="hero" />
           </div>
           <div className="card" style={{borderRadius:"0 0 20px 20px",padding:32}}>
-            <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,color:"#0a2d6e",marginBottom:4}}>Cadastro de Família</h2>
-            <p style={{color:"#64748b",fontSize:14,marginBottom:24}}>Preencha seus dados para solicitar atendimento pelo Instituto</p>
-            <div className="grid-2">
-              {[["name","Nome Completo *","text"],["email","E-mail *","email"],["cpf","CPF","text"],["phone","Telefone / WhatsApp","text"],["birthdate","Data de Nascimento","date"],["address","Endereço Completo","text"]].map(([k,l,t]) => (
-                <div key={k} className="form-group" style={k==="address"?{gridColumn:"1/-1"}:{}}>
-                  <label className="form-label">{l}</label>
-                  <input className="form-input" type={t} value={f[k]} onChange={set(k)} />
+
+            {/* Steps indicator */}
+            <div style={{display:"flex",alignItems:"center",marginBottom:28,gap:0}}>
+              {[["1","Dados"],["2","Documentos"],["3","Concluído"]].map(([n,l],i) => (
+                <div key={n} style={{display:"flex",alignItems:"center",flex:i<2?1:"auto"}}>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                    <div style={{width:32,height:32,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,
+                      background: step>i?"var(--navy)":step===i+1?"var(--gold)":"#e2e8f0",
+                      color: step>i||step===i+1?"#fff":"#94a3b8", transition:".3s"}}>
+                      {step>i+1?"✓":n}
+                    </div>
+                    <span style={{fontSize:11,fontWeight:700,color:step===i+1?"var(--navy)":"#94a3b8"}}>{l}</span>
+                  </div>
+                  {i<2 && <div style={{flex:1,height:2,background:step>i+1?"var(--navy)":"#e2e8f0",margin:"0 8px",marginBottom:20,transition:".3s"}} />}
                 </div>
               ))}
-              <div className="form-group">
-                <label className="form-label">Cidade</label>
-                <input className="form-input" value={f.city} onChange={set("city")} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Bairro</label>
-                <input className="form-input" value={f.neighborhood} onChange={set("neighborhood")} placeholder="Ex: Centro, Vila Nova..." />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Estado</label>
-                <select className="form-select" value={f.state} onChange={set("state")}>
-                  <option value="">Selecione...</option>
-                  {"AC,AL,AP,AM,BA,CE,DF,ES,GO,MA,MT,MS,MG,PA,PB,PR,PE,PI,RJ,RN,RS,RO,RR,SC,SP,SE,TO".split(",").map(s=><option key={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Nº de crianças dependentes</label>
-                <input className="form-input" type="number" min="0" max="20" value={f.children} onChange={set("children")} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Nome das crianças (idades)</label>
-                <input className="form-input" value={f.childrenNames} onChange={set("childrenNames")} placeholder="Ex: Ana (8), Pedro (12)" />
-              </div>
-              <div className="form-group" style={{gridColumn:"1/-1"}}>
-                <label className="form-label">Como conheceu o Instituto?</label>
-                <select className="form-select" value={f.howKnew} onChange={set("howKnew")}>
-                  <option value="">Selecione...</option>
-                  {["Indicação de amigo/familiar","Redes sociais","Igreja/Templo","Escola","Posto de saúde","Prefeitura","Outro"].map(o=><option key={o}>{o}</option>)}
-                </select>
-              </div>
-              <div className="form-group" style={{gridColumn:"1/-1"}}>
-                <label className="form-label">Por que busca atendimento?</label>
-                <textarea className="form-input" rows={3} value={f.reason} onChange={set("reason")} placeholder="Descreva brevemente sua situação..." />
-              </div>
-              <div className="form-group" style={{gridColumn:"1/-1"}}>
-                <label className="form-label">📷 Foto da Família (link, opcional)</label>
-                <input className="form-input" value={f.photoUrl} onChange={set("photoUrl")} placeholder="Cole um link de foto do Google Drive, iCloud etc." />
-                {f.photoUrl && <img src={f.photoUrl} alt="preview" style={{marginTop:8,width:"100%",maxHeight:140,objectFit:"cover",borderRadius:8,border:"2px solid var(--light)"}} onError={e => e.target.style.display="none"} />}
-                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Opcional — ajuda o admin a identificar a família nos eventos</div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Senha *</label>
-                <input className="form-input" type="password" value={f.password} onChange={set("password")} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Confirmar Senha *</label>
-                <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} />
-              </div>
             </div>
-            <div style={{display:"flex",gap:12,marginTop:8}}>
-              <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={handleSubmit}>Enviar Cadastro</button>
-              <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={() => go("home")}>Voltar</button>
-            </div>
+
+            {/* STEP 1 — Dados pessoais */}
+            {step===1 && (
+              <>
+                <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,color:"var(--navy)",marginBottom:4}}>👨‍👩‍👧 Dados da Família</h2>
+                <p style={{color:"#64748b",fontSize:13,marginBottom:20}}>Campos com * são obrigatórios</p>
+                <div className="grid-2">
+                  {[["name","Nome Completo *","text"],["email","E-mail *","email"],["cpf","CPF","text"],["phone","Telefone / WhatsApp","text"],["birthdate","Data de Nascimento","date"],["address","Endereço Completo","text"]].map(([k,l,t]) => (
+                    <div key={k} className="form-group" style={k==="address"?{gridColumn:"1/-1"}:{}}>
+                      <label className="form-label">{l}</label>
+                      <input className="form-input" type={t} value={f[k]} onChange={set(k)} />
+                    </div>
+                  ))}
+                  <div className="form-group">
+                    <label className="form-label">Cidade</label>
+                    <input className="form-input" value={f.city} onChange={set("city")} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Bairro</label>
+                    <input className="form-input" value={f.neighborhood} onChange={set("neighborhood")} placeholder="Ex: Centro, Vila Nova..." />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Estado</label>
+                    <select className="form-select" value={f.state} onChange={set("state")}>
+                      <option value="">Selecione...</option>
+                      {"AC,AL,AP,AM,BA,CE,DF,ES,GO,MA,MT,MS,MG,PA,PB,PR,PE,PI,RJ,RN,RS,RO,RR,SC,SP,SE,TO".split(",").map(s=><option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Nº de crianças</label>
+                    <input className="form-input" type="number" min="0" max="20" value={f.children} onChange={set("children")} />
+                  </div>
+                  <div className="form-group" style={{gridColumn:"1/-1"}}>
+                    <label className="form-label">Nome das crianças (idades)</label>
+                    <input className="form-input" value={f.childrenNames} onChange={set("childrenNames")} placeholder="Ex: Ana (8), Pedro (12)" />
+                  </div>
+                  <div className="form-group" style={{gridColumn:"1/-1"}}>
+                    <label className="form-label">Como conheceu o Instituto?</label>
+                    <select className="form-select" value={f.howKnew} onChange={set("howKnew")}>
+                      <option value="">Selecione...</option>
+                      {["Indicação de amigo/familiar","Redes sociais","Igreja/Templo","Escola","Posto de saúde","Prefeitura","Outro"].map(o=><option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{gridColumn:"1/-1"}}>
+                    <label className="form-label">Por que busca atendimento?</label>
+                    <textarea className="form-input" rows={3} value={f.reason} onChange={set("reason")} placeholder="Descreva brevemente sua situação..." />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Senha *</label>
+                    <input className="form-input" type="password" value={f.password} onChange={set("password")} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Confirmar Senha *</label>
+                    <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} />
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:12,marginTop:8}}>
+                  <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={handleStep1}>Próximo → Documentos</button>
+                  <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={() => go("home")}>Voltar</button>
+                </div>
+              </>
+            )}
+
+            {/* STEP 2 — Documentos */}
+            {step===2 && (
+              <>
+                <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,color:"var(--navy)",marginBottom:4}}>📄 Documentos</h2>
+                <div style={{background:"#fef9c3",border:"1px solid #f5c842",borderRadius:10,padding:14,marginBottom:20,fontSize:13,color:"#854d0e"}}>
+                  🔒 <strong>Seus documentos são armazenados com segurança</strong> — criptografados no servidor e acessíveis apenas pelo administrador do Instituto. Nunca ficam públicos na internet.
+                </div>
+
+                <div style={{display:"flex",flexDirection:"column",gap:16,marginBottom:24}}>
+                  {docTypes.map(({key,label,icon,accept,required}) => {
+                    const file = docs[key];
+                    const done = progress[key]===100;
+                    return (
+                      <div key={key} style={{border:`2px solid ${file?"#22c55e":"#e2e8f0"}`,borderRadius:12,padding:16,transition:".2s",background:file?"#f0fdf4":"#fff"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                          <div>
+                            <div style={{fontWeight:800,color:"var(--navy)",fontSize:15}}>{icon} {label} {required&&<span style={{color:"#ef4444"}}>*</span>}</div>
+                            {file ? (
+                              <div style={{fontSize:12,color:"#22c55e",fontWeight:700,marginTop:2}}>
+                                ✅ {file.name} ({(file.size/1024/1024).toFixed(1)}MB)
+                              </div>
+                            ) : (
+                              <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>JPG, PNG ou PDF • máx 8MB</div>
+                            )}
+                          </div>
+                          <label style={{cursor:"pointer"}}>
+                            <span className={`btn btn-sm ${file?"":"btn-blue"}`} style={{
+                              background:file?"#f1f5f9":"",color:file?"#64748b":"",padding:"6px 14px",fontSize:13
+                            }}>
+                              {file?"🔄 Trocar":"📎 Anexar"}
+                            </span>
+                            <input type="file" accept={accept} style={{display:"none"}}
+                              onChange={e => handleFileSelect(key, e.target.files[0])} />
+                          </label>
+                        </div>
+                        {progressBar(key)}
+                        {done && <div style={{fontSize:11,color:"#22c55e",marginTop:4}}>✓ Enviado com sucesso</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* LGPD consent */}
+                <div style={{background:"#f8faff",border:"1px solid #c7d7f0",borderRadius:10,padding:16,marginBottom:20}}>
+                  <div style={{fontWeight:800,color:"var(--navy)",marginBottom:8,fontSize:14}}>📜 Termo de Consentimento — LGPD</div>
+                  <div style={{fontSize:12,color:"#475569",lineHeight:1.7,marginBottom:12}}>
+                    Autorizo o Instituto Marilda Brandão a coletar, armazenar e utilizar meus dados pessoais e documentos exclusivamente para fins de cadastro, atendimento social e distribuição de benefícios. Os dados serão mantidos em ambiente seguro, acessados apenas por colaboradores autorizados, e poderão ser excluídos mediante solicitação a qualquer momento, conforme a Lei nº 13.709/2018 (LGPD). Dados de menores de idade são tratados com proteção especial, conforme exige a lei.
+                  </div>
+                  <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                    <input type="checkbox" checked={lgpd} onChange={e=>setLgpd(e.target.checked)}
+                      style={{width:18,height:18,accentColor:"var(--navy)",cursor:"pointer"}} />
+                    <span style={{fontWeight:700,fontSize:13,color:"var(--navy)"}}>Li e concordo com o termo de consentimento</span>
+                  </label>
+                </div>
+
+                <div style={{display:"flex",gap:12}}>
+                  <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={() => setStep(1)}>← Voltar</button>
+                  <button className="btn btn-gold" style={{flex:1,justifyContent:"center",opacity:uploading?.5:1}}
+                    onClick={handleSubmit} disabled={uploading}>
+                    {uploading ? "⏳ Enviando documentos..." : "✅ Finalizar Cadastro"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* STEP 3 — Sucesso */}
+            {step===3 && (
+              <div style={{textAlign:"center",padding:"32px 0"}}>
+                <div style={{fontSize:64,marginBottom:16}}>🎉</div>
+                <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:28,color:"var(--navy)",marginBottom:8}}>Cadastro Enviado!</h2>
+                <p style={{color:"#64748b",marginBottom:8,lineHeight:1.7}}>
+                  Seus dados e documentos foram recebidos com segurança.<br/>
+                  O administrador irá analisar e entrar em contato em breve.
+                </p>
+                <div style={{background:"var(--sky)",borderRadius:10,padding:14,marginBottom:24,fontSize:13,color:"var(--navy)"}}>
+                  📱 Fique de olho no seu WhatsApp — você receberá uma mensagem quando seu cadastro for aprovado.
+                </div>
+                <button className="btn btn-gold" style={{justifyContent:"center"}} onClick={() => go("login")}>Ir para Login</button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1550,6 +1749,66 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
   );
 }
 
+// ─── DOCS VIEWER (used inside Admin modal) ───────────────────────────────────
+function SelUserDocs({ userId, toast }) {
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const docLabels = { rg:"🪪 RG", cpf:"📋 CPF", comprovante:"🏠 Comprovante", certidao:"👶 Certidão" };
+
+  useEffect(() => {
+    DB.getUserDocs(userId).then(d => { setDocs(d); setLoading(false); });
+  }, [userId]);
+
+  const openDoc = async (path) => {
+    try {
+      const url = await getDownloadURL(ref(storage, path));
+      window.open(url, "_blank");
+    } catch { toast("Erro ao abrir documento","error"); }
+  };
+
+  const deleteDoc = async (docId, path) => {
+    if (!window.confirm("Remover este documento?")) return;
+    try {
+      await deleteObject(ref(storage, path));
+      await DB.deleteUserDoc(userId, docId);
+      setDocs(prev => prev.filter(d => d.id !== docId));
+      toast("Documento removido","info");
+    } catch { toast("Erro ao remover","error"); }
+  };
+
+  if (loading) return <div style={{color:"#94a3b8",fontSize:13,marginBottom:16}}>Carregando documentos...</div>;
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:800,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:8}}>
+        📄 Documentos Enviados {docs.length > 0 && `(${docs.length})`}
+      </div>
+      {docs.length === 0 ? (
+        <div style={{background:"#fef9c3",border:"1px solid #f5c842",borderRadius:8,padding:12,fontSize:13,color:"#854d0e"}}>
+          ⚠️ Nenhum documento enviado ainda
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {docs.map(d => (
+            <div key={d.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"10px 14px",gap:8,flexWrap:"wrap"}}>
+              <div>
+                <div style={{fontWeight:800,fontSize:13,color:"#166534"}}>{docLabels[d.tipo]||d.tipo}</div>
+                <div style={{fontSize:11,color:"#64748b"}}>{d.nome} · {(d.tamanho/1024/1024).toFixed(1)}MB · {d.uploadedAt}</div>
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button className="btn btn-blue btn-sm" style={{padding:"4px 12px",fontSize:12}}
+                  onClick={() => openDoc(d.path)}>👁 Ver</button>
+                <button className="btn btn-red btn-sm" style={{padding:"4px 10px",fontSize:12}}
+                  onClick={() => deleteDoc(d.id, d.path)}>🗑</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function Admin({ go, logout, toast }) {
   const [tab, setTab] = useState("cadastros");
@@ -1564,6 +1823,7 @@ function Admin({ go, logout, toast }) {
   const [newAnnouncement, setNewAnnouncement] = useState({ title:"", body:"", priority:"normal", expiresAt:"" });
   const [eventPhotos, setEventPhotos] = useState({});
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [siteSettings, setSiteSettings] = useState({ youtubeId:"", cloudinaryCloud:"", cloudinaryPreset:"" });
   const [selUser, setSelUser] = useState(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
@@ -1610,6 +1870,8 @@ function Admin({ go, logout, toast }) {
         }
         setEventPhotos(photos);
       }
+      const ss = await DB.getSiteSettings();
+      setSiteSettings(ss);
     };
     loadData();
     // Real-time listener for users
@@ -1773,7 +2035,7 @@ function Admin({ go, logout, toast }) {
 
   const stats = { total:users.length, pending:users.filter(u=>u.status==="pending").length, approved:users.filter(u=>u.status==="approved").length, rejected:users.filter(u=>u.status==="rejected").length };
 
-  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"]];
+  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],["config","⚙️ Configurações"]];
 
   return (
     <>
@@ -2055,24 +2317,32 @@ function Admin({ go, logout, toast }) {
                         <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:6}}>📸 Fotos do evento</div>
                         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
                           {(eventPhotos[ev.id]||[]).map((p,i) => (
-                            <img key={i} src={p.url} alt="evento" style={{width:60,height:60,objectFit:"cover",borderRadius:8,border:"2px solid var(--gold3)"}} />
+                            <div key={i} style={{position:"relative",width:64,height:64}}>
+                              <img src={p.url} alt="evento" style={{width:64,height:64,objectFit:"cover",borderRadius:8,border:"2px solid var(--gold3)"}} />
+                              <button onClick={async () => {
+                                if (p.id) await DB.deleteEventPhoto(ev.id, p.id);
+                                setEventPhotos(prev => ({ ...prev, [ev.id]: prev[ev.id].filter((_,j)=>j!==i) }));
+                              }} style={{position:"absolute",top:-6,right:-6,width:18,height:18,borderRadius:"50%",background:"#ef4444",color:"#fff",border:"none",cursor:"pointer",fontSize:10,lineHeight:"18px",textAlign:"center",padding:0}}>✕</button>
+                            </div>
                           ))}
                         </div>
                         <label style={{cursor:"pointer"}}>
                           <span className="btn btn-sm" style={{background:"#f1f5f9",color:"#64748b",fontSize:11,padding:"4px 10px"}}>
                             {uploadingPhoto?"Enviando...":"📸 Adicionar foto"}
                           </span>
-                          <input type="file" accept="image/*" style={{display:"none"}} onChange={async e => {
-                            const file = e.target.files[0];
-                            if (!file) return;
+                          <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={async e => {
+                            const files = Array.from(e.target.files);
+                            if (!files.length) return;
                             setUploadingPhoto(true);
                             try {
-                              const url = await DB.uploadEventPhoto(ev.id, file);
-                              const photoEntry = { url, uploadedAt: new Date().toLocaleString("pt-BR") };
-                              await DB.saveEventPhoto(ev.id, photoEntry);
-                              setEventPhotos(prev => ({ ...prev, [ev.id]: [...(prev[ev.id]||[]), photoEntry] }));
-                              toast("📸 Foto adicionada!", "success");
-                            } catch { toast("Erro ao enviar foto","error"); }
+                              for (const file of files) {
+                                const url = await DB.uploadEventPhoto(ev.id, file);
+                                const photoEntry = { url, uploadedAt: new Date().toLocaleString("pt-BR") };
+                                const saved = await DB.saveEventPhoto(ev.id, photoEntry);
+                                setEventPhotos(prev => ({ ...prev, [ev.id]: [...(prev[ev.id]||[]), photoEntry] }));
+                              }
+                              toast(`📸 ${files.length} foto(s) adicionada(s)!`, "success");
+                            } catch(err) { toast(err.message || "Erro ao enviar foto","error"); }
                             setUploadingPhoto(false);
                           }} />
                         </label>
@@ -2493,38 +2763,134 @@ function Admin({ go, logout, toast }) {
             </div>
           </div>
         )}
+
+        {/* ── CONFIGURAÇÕES ── */}
+        {tab==="config" && (
+          <div className="fade-in">
+            <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>⚙️ Configurações do Site</h1>
+            <p style={{color:"#64748b",marginBottom:24}}>Configure integrações externas e conteúdo do site</p>
+
+            {/* YouTube */}
+            <div className="card" style={{padding:28,marginBottom:20,borderLeft:"4px solid #ff0000"}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:4}}>🎬 Vídeo Institucional (YouTube)</h3>
+              <p style={{color:"#64748b",fontSize:13,marginBottom:16}}>O vídeo aparece na seção principal do site. Cole apenas o ID do vídeo (não a URL completa).</p>
+              <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap"}}>
+                <div className="form-group" style={{flex:1,minWidth:200,margin:0}}>
+                  <label className="form-label">ID do Vídeo YouTube</label>
+                  <input className="form-input" value={siteSettings.youtubeId||""} onChange={e=>setSiteSettings({...siteSettings,youtubeId:e.target.value})}
+                    placeholder="Ex: dQw4w9WgXcQ" />
+                  <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>
+                    Da URL <code>youtube.com/watch?v=<strong>ESTE_TRECHO</strong></code>
+                  </div>
+                </div>
+                <button className="btn btn-gold" style={{marginBottom:0}} onClick={async () => {
+                  await DB.saveSiteSettings(siteSettings);
+                  toast("🎬 Vídeo atualizado!", "success");
+                }}>Salvar</button>
+              </div>
+              {siteSettings.youtubeId && (
+                <div style={{marginTop:16,borderRadius:12,overflow:"hidden",maxWidth:480}}>
+                  <div className="video-wrapper" style={{borderRadius:12,overflow:"hidden"}}>
+                    <iframe src={`https://www.youtube.com/embed/${siteSettings.youtubeId}`}
+                      title="Preview" frameBorder="0" allowFullScreen />
+                  </div>
+                  <p style={{fontSize:11,color:"#94a3b8",marginTop:6}}>↑ Prévia do vídeo</p>
+                </div>
+              )}
+            </div>
+
+            {/* Cloudinary */}
+            <div className="card" style={{padding:28,marginBottom:20,borderLeft:"4px solid #3448c5"}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:4}}>☁️ Cloudinary — Upload de Fotos</h3>
+              <p style={{color:"#64748b",fontSize:13,marginBottom:16}}>Utilizado para upload de fotos dos eventos. Grátis para até 25GB/mês.</p>
+              <div style={{background:"var(--sky)",borderRadius:10,padding:14,marginBottom:16,fontSize:13,color:"var(--navy)"}}>
+                <strong>Como configurar:</strong><br/>
+                1. Crie conta gratuita em <a href="https://cloudinary.com" target="_blank" rel="noreferrer" style={{color:"var(--blue)",fontWeight:700}}>cloudinary.com</a><br/>
+                2. No painel Cloudinary → <strong>Settings → Upload → Upload presets</strong> → crie um preset com modo <strong>Unsigned</strong><br/>
+                3. Cole abaixo o <strong>Cloud Name</strong> (no topo do painel) e o <strong>Upload Preset</strong>
+              </div>
+              <div className="grid-2" style={{gap:12,marginBottom:12}}>
+                <div className="form-group">
+                  <label className="form-label">Cloud Name</label>
+                  <input className="form-input" value={siteSettings.cloudinaryCloud||""}
+                    onChange={e=>setSiteSettings({...siteSettings,cloudinaryCloud:e.target.value})}
+                    placeholder="Ex: meu-instituto" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Upload Preset (Unsigned)</label>
+                  <input className="form-input" value={siteSettings.cloudinaryPreset||""}
+                    onChange={e=>setSiteSettings({...siteSettings,cloudinaryPreset:e.target.value})}
+                    placeholder="Ex: instituto_fotos" />
+                </div>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <button className="btn btn-gold" onClick={async () => {
+                  if (!siteSettings.cloudinaryCloud || !siteSettings.cloudinaryPreset) { toast("Preencha Cloud Name e Upload Preset","error"); return; }
+                  await DB.saveSiteSettings(siteSettings);
+                  toast("☁️ Cloudinary configurado!", "success");
+                }}>Salvar</button>
+                {siteSettings.cloudinaryCloud && siteSettings.cloudinaryPreset && (
+                  <span style={{fontSize:13,color:"#22c55e",fontWeight:700}}>✅ Configurado</span>
+                )}
+              </div>
+            </div>
+
+            {/* Test upload */}
+            {siteSettings.cloudinaryCloud && siteSettings.cloudinaryPreset && (
+              <div className="card" style={{padding:24}}>
+                <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:12}}>🧪 Testar Upload de Foto</h3>
+                <label style={{cursor:"pointer",display:"inline-block"}}>
+                  <span className="btn btn-blue">📸 Escolher foto de teste</span>
+                  <input type="file" accept="image/*" style={{display:"none"}} onChange={async e => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    toast("Enviando...","info");
+                    try {
+                      const url = await DB.uploadEventPhoto("test", file);
+                      toast("✅ Upload funcionando!", "success");
+                      window.open(url,"_blank");
+                    } catch(err) { toast(err.message,"error"); }
+                  }} />
+                </label>
+                <p style={{fontSize:12,color:"#94a3b8",marginTop:8}}>A imagem abrirá em nova aba se o upload funcionar corretamente</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* USER DETAIL MODAL */}
       {selUser && (
         <div className="modal-overlay" onClick={() => setSelUser(null)}>
-          <div className="modal" style={{maxWidth:600}} onClick={e => e.stopPropagation()}>
+          <div className="modal" style={{maxWidth:620,maxHeight:"90vh",overflowY:"auto"}} onClick={e => e.stopPropagation()}>
             <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,color:"#0a2d6e",marginBottom:4}}>👨‍👩‍👧 Ficha Familiar</h2>
-            <div style={{marginBottom:16}}>
+            <div style={{marginBottom:16,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
               <span className={`badge badge-${selUser.status==="approved"?"green":selUser.status==="rejected"?"red":"yellow"}`} style={{fontSize:13}}>
                 {selUser.status==="approved"?"✅ Aprovado":selUser.status==="rejected"?"❌ Rejeitado":"⏳ Pendente"}
               </span>
+              {selUser.lgpdConsent && <span className="badge badge-blue">📜 LGPD aceito</span>}
+              {selUser.docsEnviados?.length>0 && <span className="badge badge-green">📄 {selUser.docsEnviados.length} doc(s) enviado(s)</span>}
             </div>
-            {/* Family photo */}
-            {selUser.photoUrl && (
-              <div style={{marginBottom:16,borderRadius:12,overflow:"hidden",border:"2px solid var(--light)",maxHeight:180,display:"flex",alignItems:"center",justifyContent:"center",background:"#f8faff"}}>
-                <img src={selUser.photoUrl} alt="Foto família" style={{width:"100%",maxHeight:180,objectFit:"cover",display:"block"}} onError={e=>e.target.parentElement.style.display="none"} />
-              </div>
-            )}
+
             <div className="grid-2" style={{gap:12,marginBottom:16}}>
-              {[["Nome",selUser.name],["E-mail",selUser.email],["CPF",selUser.cpf||"-"],["Telefone",selUser.phone||"-"],["Nascimento",selUser.birthdate||"-"],["Cidade/UF",`${selUser.city||"-"}/${selUser.state||"-"}`],["Endereço",selUser.address||"-"],["Crianças",selUser.children||"0"],["Nomes das crianças",selUser.childrenNames||"-"],["Como conheceu",selUser.howKnew||"-"],["Cadastro em",selUser.createdAt]].map(([l,v]) => (
-                <div key={l} style={l==="Endereço"||l==="Nomes das crianças"||l==="Como conheceu"?{gridColumn:"1/-1"}:{}}>
+              {[["Nome",selUser.name],["E-mail",selUser.email],["CPF",selUser.cpf||"-"],["Telefone",selUser.phone||"-"],["Nascimento",selUser.birthdate||"-"],["Cidade/UF",`${selUser.city||"-"}/${selUser.state||"-"}`],["Bairro",selUser.neighborhood||"-"],["Endereço",selUser.address||"-"],["Crianças",selUser.children||"0"],["Nomes das crianças",selUser.childrenNames||"-"],["Como conheceu",selUser.howKnew||"-"],["Cadastro em",selUser.createdAt]].map(([l,v]) => (
+                <div key={l} style={["Endereço","Nomes das crianças","Como conheceu"].includes(l)?{gridColumn:"1/-1"}:{}}>
                   <div style={{fontSize:11,fontWeight:800,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:2}}>{l}</div>
                   <div style={{fontSize:14,color:"#1e293b"}}>{v}</div>
                 </div>
               ))}
             </div>
+
             {selUser.reason && (
               <div style={{background:"#f8faff",padding:16,borderRadius:12,marginBottom:16}}>
                 <div style={{fontSize:11,fontWeight:800,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:6}}>Motivo do atendimento</div>
                 <p style={{fontSize:14,color:"#475569",lineHeight:1.6}}>{selUser.reason}</p>
               </div>
             )}
+
+            {/* DOCUMENTOS */}
+            <SelUserDocs userId={selUser.id} toast={toast} />
+
             <div style={{marginBottom:16}}>
               <div style={{fontSize:11,fontWeight:800,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"1px",marginBottom:8}}>QR Codes atribuídos</div>
               {events.map(ev => {
@@ -2538,6 +2904,7 @@ function Admin({ go, logout, toast }) {
                 );
               })}
             </div>
+
             <div style={{display:"flex",gap:8}}>
               {selUser.status==="pending" && <>
                 <button className="btn btn-green" onClick={() => { approveUser(selUser.id); setSelUser({...selUser,status:"approved"}); }}>✓ Aprovar</button>
