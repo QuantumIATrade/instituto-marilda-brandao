@@ -1324,6 +1324,27 @@ function Register({ go, toast }) {
 function Login({ go, onLogin, toast }) {
   const [email, setEmail] = useState(""); const [pw, setPw] = useState("");
   const [tab, setTab] = useState("familia"); // "familia" | "colaborador"
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+
+  const handleForgot = async () => {
+    if (!forgotEmail) { toast("Digite seu e-mail","error"); return; }
+    setForgotLoading(true);
+    try {
+      const users = await DB.getUsers();
+      const u = users.find(u => u.email === forgotEmail);
+      if (!u) { toast("E-mail não encontrado","error"); setForgotLoading(false); return; }
+      // Gera nova senha temporária
+      const newPw = Math.random().toString(36).slice(-8).toUpperCase();
+      await DB.updateUser(u.id, { password: newPw });
+      await DB.sendEmail(forgotEmail, "Sua nova senha - Instituto Marilda Brandão",
+        `Olá ${u.name},\n\nSua nova senha de acesso é: ${newPw}\n\nAcesse o site e troque sua senha assim que possível.\n\nInstituto Marilda Brandão`);
+      toast("Nova senha enviada para seu e-mail!","success");
+      setShowForgot(false); setForgotEmail("");
+    } catch(e) { toast("Erro: "+e.message,"error"); }
+    setForgotLoading(false);
+  };
   const handleLogin = async () => {
     // Super admin — verifica Firestore, fallback para hardcoded
     const superCreds = await DB.getSuperAdminCreds();
@@ -1383,7 +1404,15 @@ function Login({ go, onLogin, toast }) {
             <input className="form-input" type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inp} placeholder="••••••••" />
           </div>
           <button className="btn btn-gold" style={{width:"100%",justifyContent:"center",marginTop:8,padding:"13px"}} onClick={handleLogin}>Entrar</button>
-          <div style={{textAlign:"center",marginTop:16}}>
+          {/* Esqueci minha senha */}
+          {tab==="familia" && (
+            <div style={{textAlign:"center",marginTop:12}}>
+              <button className="nl" onClick={()=>setShowForgot(true)} style={{color:"rgba(255,255,255,.5)",fontSize:12}}>
+                Esqueci minha senha
+              </button>
+            </div>
+          )}
+          <div style={{textAlign:"center",marginTop:tab==="familia"?6:16}}>
             {tab==="familia" ? (
               <button className="nl" onClick={() => go("register")} style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Não tem cadastro? <span style={{color:"var(--gold2)",fontWeight:800}}>Cadastre-se</span></button>
             ) : (
@@ -1395,6 +1424,31 @@ function Login({ go, onLogin, toast }) {
           </div>
         </div>
       </div>
+      {/* Modal Esqueci minha senha */}
+      {showForgot && (
+        <div className="modal-overlay" onClick={()=>setShowForgot(false)}>
+          <div className="modal" style={{maxWidth:400}} onClick={e=>e.stopPropagation()}>
+            <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,color:"#0a2d6e",marginBottom:8}}>🔑 Esqueci minha senha</h2>
+            <p style={{color:"#64748b",fontSize:14,marginBottom:20}}>Digite seu e-mail cadastrado. Enviaremos uma senha temporária.</p>
+            <div className="form-group">
+              <label className="form-label">E-mail cadastrado</label>
+              <input className="form-input" type="email" value={forgotEmail}
+                onChange={e=>setForgotEmail(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&handleForgot()}
+                placeholder="seu@email.com" />
+            </div>
+            <div style={{display:"flex",gap:12,marginTop:8}}>
+              <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}}
+                onClick={handleForgot} disabled={forgotLoading}>
+                {forgotLoading?"Enviando...":"📧 Enviar nova senha"}
+              </button>
+              <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}}
+                onClick={()=>setShowForgot(false)}>Cancelar</button>
+            </div>
+            <p style={{fontSize:11,color:"#94a3b8",marginTop:12}}>⚠️ Requer EmailJS configurado no painel admin (Configurações).</p>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -1457,6 +1511,8 @@ function Dashboard({ user, go, logout }) {
   const [userData, setUserData] = useState(user);
   const [events, setEvents] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [changePw, setChangePw] = useState({ current:"", newPw:"", confirm:"" });
   useEffect(() => {
     DB.getEvents().then(evs => setEvents(evs));
     DB.getAnnouncements().then(anns => setAnnouncements(anns.filter(a => !a.expiresAt || new Date(a.expiresAt) >= new Date())));
@@ -1517,6 +1573,8 @@ function Dashboard({ user, go, logout }) {
               <div style={{marginTop:12,padding:"8px 12px",background:"#dcfce7",borderRadius:8,fontSize:13,fontWeight:700,color:"#166534"}}>
                 ✅ Cadastro Aprovado
               </div>
+              <button className="btn btn-sm" style={{marginTop:14,background:"#f1f5f9",color:"#475569",width:"100%",justifyContent:"center"}}
+                onClick={()=>setShowChangePw(true)}>🔑 Alterar minha senha</button>
             </div>
             {/* Calendar */}
             <div>
@@ -1579,6 +1637,44 @@ function Dashboard({ user, go, logout }) {
         </div>
       </div>
       <WhatsAppBtn phone="5500000000000" />
+      {/* Modal Trocar Senha */}
+      {showChangePw && (
+        <div className="modal-overlay" onClick={()=>setShowChangePw(false)}>
+          <div className="modal" style={{maxWidth:420}} onClick={e=>e.stopPropagation()}>
+            <h2 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,color:"#0a2d6e",marginBottom:8}}>🔑 Alterar Senha</h2>
+            <p style={{color:"#64748b",fontSize:14,marginBottom:20}}>Digite sua senha atual e escolha uma nova.</p>
+            <div className="form-group">
+              <label className="form-label">Senha atual</label>
+              <input className="form-input" type="password" value={changePw.current}
+                onChange={e=>setChangePw({...changePw,current:e.target.value})} placeholder="••••••••" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nova senha</label>
+              <input className="form-input" type="password" value={changePw.newPw}
+                onChange={e=>setChangePw({...changePw,newPw:e.target.value})} placeholder="Mínimo 6 caracteres" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Confirmar nova senha</label>
+              <input className="form-input" type="password" value={changePw.confirm}
+                onChange={e=>setChangePw({...changePw,confirm:e.target.value})} placeholder="Repita a nova senha" />
+            </div>
+            <div style={{display:"flex",gap:12,marginTop:4}}>
+              <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={async()=>{
+                if (changePw.current !== userData.password) { alert("Senha atual incorreta"); return; }
+                if (changePw.newPw.length < 6) { alert("Nova senha deve ter ao menos 6 caracteres"); return; }
+                if (changePw.newPw !== changePw.confirm) { alert("As senhas não coincidem"); return; }
+                await DB.updateUser(userData.id, { password: changePw.newPw });
+                setUserData({...userData, password: changePw.newPw});
+                setChangePw({ current:"", newPw:"", confirm:"" });
+                setShowChangePw(false);
+                alert("✅ Senha alterada com sucesso!");
+              }}>💾 Salvar nova senha</button>
+              <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}}
+                onClick={()=>setShowChangePw(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -3561,11 +3657,19 @@ function Admin({ go, logout, toast, adminUser }) {
               })}
             </div>
 
-            <div style={{display:"flex",gap:8}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {selUser.status==="pending" && <>
                 <button className="btn btn-green" onClick={() => { approveUser(selUser.id); setSelUser({...selUser,status:"approved"}); }}>✓ Aprovar</button>
                 <button className="btn btn-red" onClick={() => { rejectUser(selUser.id); setSelUser({...selUser,status:"rejected"}); }}>✗ Rejeitar</button>
               </>}
+              <button className="btn" style={{background:"#fef9c3",color:"#854d0e"}} onClick={async()=>{
+                const newPw = Math.random().toString(36).slice(-8).toUpperCase();
+                if (!window.confirm(`Resetar senha de ${selUser.name}?\nNova senha temporária: ${newPw}`)) return;
+                await DB.updateUser(selUser.id, { password: newPw });
+                await DB.sendEmail(selUser.email, "Sua senha foi redefinida - Instituto Marilda Brandão",
+                  `Olá ${selUser.name},\n\nSua senha foi redefinida pelo administrador.\n\nNova senha temporária: ${newPw}\n\nAcesse o site e troque sua senha assim que possível.\n\nInstituto Marilda Brandão`);
+                toast(`✅ Senha resetada! Nova senha: ${newPw}`,"success");
+              }}>🔑 Resetar Senha</button>
               <button className="btn" style={{background:"#f1f5f9",color:"#64748b",marginLeft:"auto"}} onClick={() => setSelUser(null)}>Fechar</button>
             </div>
             <button onClick={() => setSelUser(null)} style={{position:"absolute",top:16,right:16,background:"none",fontSize:20,color:"#64748b"}}>✕</button>
