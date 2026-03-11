@@ -1802,9 +1802,14 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment", width:{ideal:1280}, height:{ideal:720} } });
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute("playsinline", true);
+        videoRef.current.setAttribute("muted", true);
+        await videoRef.current.play();
+      }
       setScanning(true);
       if (!window.jsQR) {
         const s = document.createElement("script");
@@ -1812,7 +1817,7 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
         s.onload = () => scanLoop();
         document.head.appendChild(s);
       } else { scanLoop(); }
-    } catch { toast("Câmera não disponível","error"); }
+    } catch(e) { toast("Câmera não disponível: "+e.message,"error"); }
   };
 
   const scanLoop = () => {
@@ -1865,7 +1870,7 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
             <div className={`qr-scanner-area${scanning?" active":""}`} style={{marginBottom:20,position:"relative"}}>
               {scanning ? (
                 <>
-                  <video ref={videoRef} style={{width:"100%",maxHeight:300,borderRadius:10,objectFit:"cover"}} />
+                  <video ref={videoRef} autoPlay playsInline muted style={{width:"100%",maxHeight:300,borderRadius:10,objectFit:"cover",display:"block"}} />
                   <button className="btn btn-red btn-sm" style={{marginTop:12}} onClick={stopCamera}>✕ Fechar câmera</button>
                 </>
               ) : (
@@ -2548,9 +2553,14 @@ function Admin({ go, logout, toast, adminUser }) {
   // Camera QR scanning
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment" } });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:"environment", width:{ideal:1280}, height:{ideal:720} } });
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute("playsinline", true);
+        videoRef.current.setAttribute("muted", true);
+        await videoRef.current.play();
+      }
       setScanning(true);
       // Load jsQR dynamically
       if (!window.jsQR) {
@@ -2559,7 +2569,7 @@ function Admin({ go, logout, toast, adminUser }) {
         script.onload = () => startScanLoop();
         document.head.appendChild(script);
       } else { startScanLoop(); }
-    } catch { toast("Câmera não disponível. Use o campo de texto.", "error"); }
+    } catch(e) { toast("Câmera não disponível: "+e.message, "error"); }
   };
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach(t => t.stop());
