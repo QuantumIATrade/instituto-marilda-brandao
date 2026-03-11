@@ -48,6 +48,17 @@ const DB = {
   async getUserDocs(userId) { const s = await getDocs(collection(db,`docs_${userId}`)); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveUserDoc(userId, d) { return await addDoc(collection(db,`docs_${userId}`),d); },
   async deleteUserDoc(userId, docId) { await deleteDoc(doc(db,`docs_${userId}`,docId)); },
+  // Depoimentos
+  async getDepoimentos() { const s = await getDocs(collection(db,"depoimentos")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveDepoimento(d) { const {id,...data}=d; if(id) await setDoc(doc(db,"depoimentos",id),data); else await addDoc(collection(db,"depoimentos"),data); },
+  async deleteDepoimento(id) { await deleteDoc(doc(db,"depoimentos",id)); },
+  // Parceiros
+  async getParceiros() { const s = await getDocs(collection(db,"parceiros")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveParceiro(p) { const {id,...data}=p; if(id) await setDoc(doc(db,"parceiros",id),data); else return await addDoc(collection(db,"parceiros"),data); },
+  async deleteParceiro(id) { await deleteDoc(doc(db,"parceiros",id)); },
+  // Texto do site (sobre, missão, contato, etc)
+  async getSiteText() { const d = await getDoc(doc(db,"settings","site_text")); return d.exists()?d.data():{}; },
+  async saveSiteText(data) { await setDoc(doc(db,"settings","site_text"),data); },
   async getDonations() { const s = await getDocs(collection(db,"donations")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveDonation(d) { await addDoc(collection(db,"donations"),d); },
   async deleteDonation(id) { await deleteDoc(doc(db,"donations",id)); },
@@ -563,6 +574,14 @@ function Home({ go }) {
     { name: "João P.", role: "Voluntário há 3 anos", text: "Ver o sorriso das crianças ao receber os kits é uma recompensa que nenhum dinheiro paga.", avatar: "👨" },
     { name: "Carla M.", role: "Doadora", text: "Empresa transparente e séria. Meu investimento realmente chega às crianças.", avatar: "👩‍💼" },
   ];
+  const [dynamicPartners, setDynamicPartners] = useState([]);
+  const [dynamicTestimonials, setDynamicTestimonials] = useState([]);
+  const [siteText, setSiteTextLocal] = useState({});
+  useEffect(() => {
+    DB.getParceiros().then(p => setDynamicPartners(p));
+    DB.getDepoimentos().then(d => setDynamicTestimonials(d));
+    DB.getSiteText().then(t => setSiteTextLocal(t));
+  }, []);
   return (
     <>
       <style>{CSS}</style>
@@ -651,13 +670,13 @@ function Home({ go }) {
         <div className="container">
           <div className="grid-2" style={{alignItems:"center",gap:64}}>
             <div>
-              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:800,color:"var(--gold)",letterSpacing:"3px",textTransform:"uppercase",marginBottom:8}}>Nossa História</div>
-              <h2 className="section-title">Quem Somos</h2>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:13,fontWeight:800,color:"var(--gold)",letterSpacing:"3px",textTransform:"uppercase",marginBottom:8}}>{siteText.sobre_supertitulo||"Nossa História"}</div>
+              <h2 className="section-title">{siteText.sobre_titulo||"Quem Somos"}</h2>
               <p style={{color:"#475569",lineHeight:1.8,marginBottom:16}}>
-                O Instituto Marilda Brandão nasceu do sonho de garantir que toda criança tivesse acesso a educação de qualidade, independente de sua condição social. Fundado com amor e dedicação, atendemos famílias em situação de vulnerabilidade há mais de uma década.
+                {siteText.sobre_texto1||"O Instituto Marilda Brandão nasceu do sonho de garantir que toda criança tivesse acesso a educação de qualidade, independente de sua condição social. Fundado com amor e dedicação, atendemos famílias em situação de vulnerabilidade há mais de uma década."}
               </p>
               <p style={{color:"#475569",lineHeight:1.8,marginBottom:24}}>
-                Nossa missão é clara: promover o desenvolvimento integral de crianças e adolescentes através de programas educativos, culturais e de inclusão social, sempre respeitando a dignidade de cada família.
+                {siteText.sobre_texto2||"Nossa missão é clara: promover o desenvolvimento integral de crianças e adolescentes através de programas educativos, culturais e de inclusão social, sempre respeitando a dignidade de cada família."}
               </p>
               <div style={{display:"flex",gap:12}}>
                 <button className="btn btn-blue btn-sm" onClick={() => setShowVol(true)}>🤝 Seja Voluntário</button>
@@ -665,7 +684,7 @@ function Home({ go }) {
               </div>
             </div>
             <div>
-              <img src="https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=600&q=80" alt="Instituto" style={{width:"100%",borderRadius:20,boxShadow:"0 8px 40px rgba(0,0,0,.15)"}} />
+              <img src={siteText.sobre_foto||"https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=600&q=80"} alt="Instituto" style={{width:"100%",borderRadius:20,boxShadow:"0 8px 40px rgba(0,0,0,.15)"}} />
             </div>
           </div>
         </div>
@@ -748,12 +767,15 @@ function Home({ go }) {
           <h2 className="section-title">Depoimentos</h2>
           <p className="section-sub">O que dizem quem faz parte desta história</p>
           <div className="grid-3">
-            {testimonials.map((t, i) => (
+            {(dynamicTestimonials.length > 0 ? dynamicTestimonials : testimonials).map((t, i) => (
               <div key={i} className="testi-card">
                 <div style={{fontSize:32,marginBottom:12}}>"</div>
                 <p style={{color:"#475569",lineHeight:1.7,marginBottom:20,fontStyle:"italic"}}>{t.text}</p>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <div style={{width:44,height:44,borderRadius:"50%",background:"var(--sky)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{t.avatar}</div>
+                  {t.avatarUrl
+                    ? <img src={t.avatarUrl} alt={t.name} style={{width:44,height:44,borderRadius:"50%",objectFit:"cover",border:"2px solid var(--sky)"}} />
+                    : <div style={{width:44,height:44,borderRadius:"50%",background:"var(--sky)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{t.avatar||"👤"}</div>
+                  }
                   <div>
                     <div style={{fontWeight:800,fontSize:14,color:"#0a2d6e"}}>{t.name}</div>
                     <div style={{fontSize:12,color:"#64748b"}}>{t.role}</div>
@@ -855,14 +877,22 @@ function Home({ go }) {
           <h2 className="section-title">Parceiros e Apoiadores</h2>
           <p className="section-sub">Empresas e organizações que acreditam no nosso trabalho</p>
           <div className="grid-4">
-            {partners.map((p, i) => (
-              <div key={i} className="partner-logo">
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:24,marginBottom:6}}>🤝</div>
-                  <div>{p}</div>
+            {(dynamicPartners.length > 0 ? dynamicPartners : partners.map(p=>({nome:p}))).map((p, i) => {
+              const Card = (
+                <div key={i} className="partner-logo" style={{cursor:p.link?"pointer":"default",transition:".2s",flexDirection:"column",gap:10}}>
+                  {p.logoUrl
+                    ? <img src={p.logoUrl} alt={p.nome} style={{maxHeight:60,maxWidth:"100%",objectFit:"contain"}} />
+                    : <div style={{fontSize:32}}>🤝</div>
+                  }
+                  <div style={{fontWeight:700,fontSize:13,color:"#0a2d6e",textAlign:"center"}}>{p.nome}</div>
+                  {p.tipo && <div style={{fontSize:11,color:"#94a3b8",textAlign:"center"}}>{p.tipo}</div>}
+                  {p.link && <div style={{fontSize:11,color:"var(--blue)",fontWeight:700}}>↗ Visitar</div>}
                 </div>
-              </div>
-            ))}
+              );
+              return p.link
+                ? <a key={i} href={p.link} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}>{Card}</a>
+                : Card;
+            })}
           </div>
           <div style={{textAlign:"center",marginTop:40}}>
             <p style={{color:"#64748b",marginBottom:16}}>Sua empresa pode fazer parte desta história</p>
@@ -922,10 +952,10 @@ function Home({ go }) {
             <div>
               <div style={{display:"flex",flexDirection:"column",gap:16,marginBottom:32}}>
                 {[
-                  { icon:"📍", label:"Endereço", value:"Rua das Flores, 123 – Bairro Centro – Cidade/UF – CEP 00000-000" },
-                  { icon:"📞", label:"Telefone", value:"(00) 0000-0000 | (00) 00000-0000" },
-                  { icon:"📧", label:"E-mail", value:"contato@marildabrandao.org.br" },
-                  { icon:"🕐", label:"Horário", value:"Segunda a Sexta: 8h às 17h | Sábado: 8h às 12h" },
+                  { icon:"📍", label:"Endereço", value: siteText.contato_endereco||"Rua das Flores, 123 – Bairro Centro – Cidade/UF – CEP 00000-000" },
+                  { icon:"📞", label:"Telefone", value: siteText.contato_telefone||"(00) 0000-0000 | (00) 00000-0000" },
+                  { icon:"📧", label:"E-mail", value: siteText.contato_email||"contato@marildabrandao.org.br" },
+                  { icon:"🕐", label:"Horário", value: siteText.contato_horario||"Segunda a Sexta: 8h às 17h | Sábado: 8h às 12h" },
                 ].map((c, i) => (
                   <div key={i} style={{display:"flex",gap:14,alignItems:"flex-start"}}>
                     <span style={{fontSize:22,width:30,textAlign:"center"}}>{c.icon}</span>
@@ -936,9 +966,11 @@ function Home({ go }) {
                   </div>
                 ))}
               </div>
-              <div style={{display:"flex",gap:12}}>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                 <button className="btn btn-gold" onClick={() => setShowPix(true)}>💛 Fazer Doação</button>
                 <button className="btn btn-blue" onClick={() => setShowVol(true)}>🤝 Ser Voluntário</button>
+                {siteText.contato_instagram && <a href={siteText.contato_instagram} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)",color:"#fff",textDecoration:"none"}}>📸 Instagram</a>}
+                {siteText.contato_facebook && <a href={siteText.contato_facebook} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"#1877f2",color:"#fff",textDecoration:"none"}}>👍 Facebook</a>}
               </div>
             </div>
             <div>
@@ -1809,6 +1841,398 @@ function SelUserDocs({ userId, toast }) {
   );
 }
 
+// ─── TAB CONTEÚDO DO SITE ────────────────────────────────────────────────────
+function TabConteudo({ toast }) {
+  const [sub, setSub] = useState("sobre");
+  const subTabs = [["sobre","📖 Sobre & História"],["depoimentos","💬 Depoimentos"],["parceiros","🤝 Parceiros"],["contato","📍 Contato & Rodapé"]];
+
+  // ── SOBRE state
+  const [siteText, setSiteText] = useState({});
+  const [stLoading, setStLoading] = useState(true);
+  useEffect(() => { DB.getSiteText().then(t => { setSiteText(t); setStLoading(false); }); }, []);
+  const saveSiteText = async () => {
+    await DB.saveSiteText(siteText);
+    toast("✅ Conteúdo salvo!", "success");
+  };
+
+  // ── DEPOIMENTOS state
+  const [depList, setDepList] = useState([]);
+  const [depForm, setDepForm] = useState({ name:"", role:"", text:"", avatar:"👤", avatarUrl:"" });
+  const [depEdit, setDepEdit] = useState(null);
+  const [depLoading, setDepLoading] = useState(true);
+  const [depUploading, setDepUploading] = useState(false);
+  useEffect(() => { DB.getDepoimentos().then(d => { setDepList(d); setDepLoading(false); }); }, []);
+
+  const saveDepoimento = async () => {
+    if (!depForm.name || !depForm.text) { toast("Nome e texto são obrigatórios","error"); return; }
+    const obj = depEdit ? { ...depForm, id: depEdit } : { ...depForm };
+    await DB.saveDepoimento(obj);
+    const list = await DB.getDepoimentos();
+    setDepList(list);
+    setDepForm({ name:"", role:"", text:"", avatar:"👤", avatarUrl:"" });
+    setDepEdit(null);
+    toast(depEdit ? "✅ Depoimento atualizado!" : "✅ Depoimento adicionado!", "success");
+  };
+
+  const deleteDepoimento = async (id) => {
+    if (!window.confirm("Remover este depoimento?")) return;
+    await DB.deleteDepoimento(id);
+    setDepList(prev => prev.filter(d => d.id !== id));
+    toast("Depoimento removido","info");
+  };
+
+  const uploadDepAvatar = async (file) => {
+    if (!file) return;
+    setDepUploading(true);
+    try {
+      const url = await DB.uploadToCloudinary(file, "dep_avatar");
+      setDepForm(prev => ({...prev, avatarUrl: url}));
+      toast("Foto enviada!","success");
+    } catch { toast("Erro no upload","error"); }
+    setDepUploading(false);
+  };
+
+  // ── PARCEIROS state
+  const [parList, setParList] = useState([]);
+  const [parForm, setParForm] = useState({ nome:"", tipo:"", link:"", logoUrl:"" });
+  const [parEdit, setParEdit] = useState(null);
+  const [parLoading, setParLoading] = useState(true);
+  const [parUploading, setParUploading] = useState(false);
+  useEffect(() => { DB.getParceiros().then(p => { setParList(p); setParLoading(false); }); }, []);
+
+  const saveParceiro = async () => {
+    if (!parForm.nome) { toast("Nome é obrigatório","error"); return; }
+    const obj = parEdit ? { ...parForm, id: parEdit } : { ...parForm };
+    await DB.saveParceiro(obj);
+    const list = await DB.getParceiros();
+    setParList(list);
+    setParForm({ nome:"", tipo:"", link:"", logoUrl:"" });
+    setParEdit(null);
+    toast(parEdit ? "✅ Parceiro atualizado!" : "✅ Parceiro adicionado!", "success");
+  };
+
+  const deleteParceiro = async (id) => {
+    if (!window.confirm("Remover este parceiro?")) return;
+    await DB.deleteParceiro(id);
+    setParList(prev => prev.filter(p => p.id !== id));
+    toast("Parceiro removido","info");
+  };
+
+  const uploadLogoFile = async (file) => {
+    if (!file) return;
+    setParUploading(true);
+    try {
+      const url = await DB.uploadToCloudinary(file, "parceiro_logo");
+      setParForm(prev => ({...prev, logoUrl: url}));
+      toast("Logo enviado!","success");
+    } catch { toast("Erro no upload","error"); }
+    setParUploading(false);
+  };
+
+  const inputStyle = { width:"100%", padding:"10px 14px", borderRadius:8, border:"1.5px solid #e2e8f0", fontSize:14, fontFamily:"inherit", outline:"none", boxSizing:"border-box" };
+  const textareaStyle = { ...inputStyle, minHeight:90, resize:"vertical" };
+
+  return (
+    <div className="fade-in">
+      <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>🌐 Conteúdo do Site</h1>
+      <p style={{color:"#64748b",marginBottom:20}}>Edite textos, depoimentos, parceiros e informações do site em tempo real</p>
+
+      {/* Sub-tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:28,flexWrap:"wrap"}}>
+        {subTabs.map(([k,l]) => (
+          <button key={k} onClick={() => setSub(k)} style={{
+            padding:"8px 18px",borderRadius:99,fontWeight:700,fontSize:13,border:"none",cursor:"pointer",transition:".2s",
+            background:sub===k?"var(--navy)":"#f1f5f9",color:sub===k?"#fff":"#64748b"
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── SOBRE & HISTÓRIA ── */}
+      {sub==="sobre" && (
+        <div style={{display:"flex",flexDirection:"column",gap:20}}>
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>📖 Seção "Quem Somos"</h3>
+            <div className="grid-2" style={{gap:16}}>
+              <div className="form-group">
+                <label className="form-label">Supertítulo (acima do título)</label>
+                <input style={inputStyle} value={siteText.sobre_supertitulo||""} onChange={e=>setSiteText({...siteText,sobre_supertitulo:e.target.value})} placeholder="Ex: Nossa História" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Título principal</label>
+                <input style={inputStyle} value={siteText.sobre_titulo||""} onChange={e=>setSiteText({...siteText,sobre_titulo:e.target.value})} placeholder="Ex: Quem Somos" />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Parágrafo 1 — História / Origem</label>
+                <textarea style={textareaStyle} value={siteText.sobre_texto1||""} onChange={e=>setSiteText({...siteText,sobre_texto1:e.target.value})} placeholder="Conte a história do Instituto..." />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Parágrafo 2 — Missão / Valores</label>
+                <textarea style={textareaStyle} value={siteText.sobre_texto2||""} onChange={e=>setSiteText({...siteText,sobre_texto2:e.target.value})} placeholder="Descreva a missão e valores..." />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">URL da Foto (seção Sobre)</label>
+                <input style={inputStyle} value={siteText.sobre_foto||""} onChange={e=>setSiteText({...siteText,sobre_foto:e.target.value})} placeholder="https://... ou URL do Cloudinary" />
+                {siteText.sobre_foto && <img src={siteText.sobre_foto} alt="preview" style={{marginTop:8,maxHeight:140,borderRadius:10,border:"2px solid #e2e8f0"}} />}
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>🎬 Seção do Vídeo Institucional</h3>
+            <div className="grid-2" style={{gap:16}}>
+              <div className="form-group">
+                <label className="form-label">Título da seção do vídeo</label>
+                <input style={inputStyle} value={siteText.video_titulo||""} onChange={e=>setSiteText({...siteText,video_titulo:e.target.value})} placeholder="Ex: Conheça Nossa História" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Supertítulo</label>
+                <input style={inputStyle} value={siteText.video_super||""} onChange={e=>setSiteText({...siteText,video_super:e.target.value})} placeholder="Ex: Nossa Missão" />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Texto descritivo ao lado do vídeo</label>
+                <textarea style={textareaStyle} value={siteText.video_texto||""} onChange={e=>setSiteText({...siteText,video_texto:e.target.value})} placeholder="Texto que aparece ao lado do vídeo..." />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Itens de destaque (um por linha)</label>
+                <textarea style={{...textareaStyle,minHeight:80}} value={siteText.video_itens||""} onChange={e=>setSiteText({...siteText,video_itens:e.target.value})} placeholder={"Mais de 10 anos de história\nAtuação em comunidades vulneráveis\nProjetos reconhecidos pelo poder público"} />
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Cada linha vira um item com ✓ na lista</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>🏛️ Transparência e Selos</h3>
+            <div className="grid-2" style={{gap:16}}>
+              <div className="form-group">
+                <label className="form-label">CNPJ</label>
+                <input style={inputStyle} value={siteText.cnpj||""} onChange={e=>setSiteText({...siteText,cnpj:e.target.value})} placeholder="00.000.000/0001-00" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Conselho Municipal</label>
+                <input style={inputStyle} value={siteText.conselho||""} onChange={e=>setSiteText({...siteText,conselho:e.target.value})} placeholder="Ex: Conselho Municipal da Criança" />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Texto de compromisso de transparência</label>
+                <textarea style={textareaStyle} value={siteText.transparencia_texto||""} onChange={e=>setSiteText({...siteText,transparencia_texto:e.target.value})} placeholder="🔒 Compromisso de Transparência: ..." />
+              </div>
+            </div>
+          </div>
+
+          <button className="btn btn-gold" style={{alignSelf:"flex-start",fontSize:15,padding:"12px 32px"}} onClick={saveSiteText}>
+            💾 Salvar Todas as Alterações
+          </button>
+        </div>
+      )}
+
+      {/* ── DEPOIMENTOS ── */}
+      {sub==="depoimentos" && (
+        <div style={{display:"flex",flexDirection:"column",gap:20}}>
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>
+              {depEdit ? "✏️ Editar Depoimento" : "➕ Novo Depoimento"}
+            </h3>
+            <div className="grid-2" style={{gap:16}}>
+              <div className="form-group">
+                <label className="form-label">Nome *</label>
+                <input style={inputStyle} value={depForm.name} onChange={e=>setDepForm({...depForm,name:e.target.value})} placeholder="Ex: Maria S." />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Função / Papel</label>
+                <input style={inputStyle} value={depForm.role} onChange={e=>setDepForm({...depForm,role:e.target.value})} placeholder="Ex: Mãe de beneficiário, Voluntário..." />
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Depoimento *</label>
+                <textarea style={textareaStyle} value={depForm.text} onChange={e=>setDepForm({...depForm,text:e.target.value})} placeholder="Digite o depoimento..." />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Emoji Avatar (se não tiver foto)</label>
+                <input style={inputStyle} value={depForm.avatar} onChange={e=>setDepForm({...depForm,avatar:e.target.value})} placeholder="👩 👨 👴 👵 ..." />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Foto do Depoente (upload)</label>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  {depForm.avatarUrl && <img src={depForm.avatarUrl} alt="avatar" style={{width:48,height:48,borderRadius:"50%",objectFit:"cover",border:"2px solid var(--sky)"}} />}
+                  <label style={{cursor:"pointer"}}>
+                    <span className="btn btn-blue btn-sm" style={{fontSize:12,opacity:depUploading?.6:1}}>
+                      {depUploading?"⏳ Enviando...":"📸 Upload"}
+                    </span>
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>uploadDepAvatar(e.target.files[0])} disabled={depUploading} />
+                  </label>
+                  {depForm.avatarUrl && <button className="btn btn-sm" style={{background:"#fee2e2",color:"#ef4444",fontSize:12}} onClick={()=>setDepForm({...depForm,avatarUrl:""})}>✕ Remover</button>}
+                </div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:8}}>
+              <button className="btn btn-gold" onClick={saveDepoimento}>{depEdit?"✅ Atualizar":"➕ Adicionar"}</button>
+              {depEdit && <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={()=>{setDepEdit(null);setDepForm({name:"",role:"",text:"",avatar:"👤",avatarUrl:""});}}>Cancelar</button>}
+            </div>
+          </div>
+
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>💬 Depoimentos Cadastrados ({depList.length})</h3>
+            {depLoading ? <div style={{color:"#94a3b8"}}>Carregando...</div> : depList.length===0 ? (
+              <div style={{background:"#f8faff",borderRadius:10,padding:20,textAlign:"center",color:"#94a3b8"}}>
+                Nenhum depoimento cadastrado — os exemplos padrão serão exibidos no site
+              </div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {depList.map(d => (
+                  <div key={d.id} style={{display:"flex",alignItems:"flex-start",gap:16,background:"#f8faff",borderRadius:12,padding:16,flexWrap:"wrap"}}>
+                    {d.avatarUrl
+                      ? <img src={d.avatarUrl} alt={d.name} style={{width:44,height:44,borderRadius:"50%",objectFit:"cover",flexShrink:0}} />
+                      : <div style={{width:44,height:44,borderRadius:"50%",background:"var(--sky)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{d.avatar||"👤"}</div>
+                    }
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,color:"var(--navy)",fontSize:14}}>{d.name}</div>
+                      <div style={{fontSize:12,color:"#94a3b8",marginBottom:6}}>{d.role}</div>
+                      <div style={{fontSize:13,color:"#475569",fontStyle:"italic",lineHeight:1.6}}>"{d.text}"</div>
+                    </div>
+                    <div style={{display:"flex",gap:6,flexShrink:0}}>
+                      <button className="btn btn-blue btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={()=>{setDepEdit(d.id);setDepForm({name:d.name,role:d.role||"",text:d.text,avatar:d.avatar||"👤",avatarUrl:d.avatarUrl||""});setSub("depoimentos");window.scrollTo(0,0);}}>✏️</button>
+                      <button className="btn btn-red btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={()=>deleteDepoimento(d.id)}>🗑</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── PARCEIROS ── */}
+      {sub==="parceiros" && (
+        <div style={{display:"flex",flexDirection:"column",gap:20}}>
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>
+              {parEdit ? "✏️ Editar Parceiro" : "➕ Novo Parceiro"}
+            </h3>
+            <div className="grid-2" style={{gap:16}}>
+              <div className="form-group">
+                <label className="form-label">Nome do Parceiro *</label>
+                <input style={inputStyle} value={parForm.nome} onChange={e=>setParForm({...parForm,nome:e.target.value})} placeholder="Ex: Prefeitura Municipal" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Tipo / Categoria</label>
+                <select style={inputStyle} value={parForm.tipo} onChange={e=>setParForm({...parForm,tipo:e.target.value})}>
+                  <option value="">Selecione...</option>
+                  {["Patrocinador Ouro","Patrocinador Prata","Apoiador Institucional","Parceiro Público","Parceiro Privado","Doador","Voluntário Corporativo"].map(o=><option key={o}>{o}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Link (site, Instagram, Facebook...)</label>
+                <input style={inputStyle} value={parForm.link} onChange={e=>setParForm({...parForm,link:e.target.value})} placeholder="https://www.empresa.com.br ou https://instagram.com/empresa" />
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>O logo será clicável e abrirá este link em nova aba</div>
+              </div>
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Logo / Foto da Empresa</label>
+                <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                  {parForm.logoUrl && (
+                    <div style={{background:"#f8faff",border:"2px solid #e2e8f0",borderRadius:10,padding:10}}>
+                      <img src={parForm.logoUrl} alt="logo" style={{maxHeight:60,maxWidth:160,objectFit:"contain"}} />
+                    </div>
+                  )}
+                  <label style={{cursor:"pointer"}}>
+                    <span className="btn btn-blue btn-sm" style={{fontSize:12,opacity:parUploading?.6:1}}>
+                      {parUploading?"⏳ Enviando...":"📸 Upload do Logo"}
+                    </span>
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>uploadLogoFile(e.target.files[0])} disabled={parUploading} />
+                  </label>
+                  <span style={{fontSize:12,color:"#94a3b8"}}>ou</span>
+                  <div style={{flex:1,minWidth:200}}>
+                    <input style={inputStyle} value={parForm.logoUrl} onChange={e=>setParForm({...parForm,logoUrl:e.target.value})} placeholder="Cole URL da imagem..." />
+                  </div>
+                  {parForm.logoUrl && <button className="btn btn-sm" style={{background:"#fee2e2",color:"#ef4444",fontSize:12}} onClick={()=>setParForm({...parForm,logoUrl:""})}>✕</button>}
+                </div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:8}}>
+              <button className="btn btn-gold" onClick={saveParceiro}>{parEdit?"✅ Atualizar":"➕ Adicionar"}</button>
+              {parEdit && <button className="btn" style={{background:"#f1f5f9",color:"#64748b"}} onClick={()=>{setParEdit(null);setParForm({nome:"",tipo:"",link:"",logoUrl:""});}}>Cancelar</button>}
+            </div>
+          </div>
+
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>🤝 Parceiros Cadastrados ({parList.length})</h3>
+            {parLoading ? <div style={{color:"#94a3b8"}}>Carregando...</div> : parList.length===0 ? (
+              <div style={{background:"#f8faff",borderRadius:10,padding:20,textAlign:"center",color:"#94a3b8"}}>
+                Nenhum parceiro cadastrado — os exemplos padrão serão exibidos no site
+              </div>
+            ) : (
+              <div className="grid-2" style={{gap:12}}>
+                {parList.map(p => (
+                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:14,background:"#f8faff",borderRadius:12,padding:14,flexWrap:"wrap"}}>
+                    {p.logoUrl
+                      ? <img src={p.logoUrl} alt={p.nome} style={{width:56,height:44,objectFit:"contain",borderRadius:8,background:"#fff",border:"1px solid #e2e8f0",padding:4,flexShrink:0}} />
+                      : <div style={{width:56,height:44,borderRadius:8,background:"var(--sky)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🤝</div>
+                    }
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,color:"var(--navy)",fontSize:14}}>{p.nome}</div>
+                      {p.tipo && <div style={{fontSize:11,color:"#94a3b8"}}>{p.tipo}</div>}
+                      {p.link && <a href={p.link} target="_blank" rel="noopener noreferrer" style={{fontSize:11,color:"var(--blue)",fontWeight:700,wordBreak:"break-all"}}>↗ {p.link}</a>}
+                    </div>
+                    <div style={{display:"flex",gap:6,flexShrink:0}}>
+                      <button className="btn btn-blue btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={()=>{setParEdit(p.id);setParForm({nome:p.nome,tipo:p.tipo||"",link:p.link||"",logoUrl:p.logoUrl||""});window.scrollTo(0,0);}}>✏️</button>
+                      <button className="btn btn-red btn-sm" style={{padding:"4px 10px",fontSize:12}} onClick={()=>deleteParceiro(p.id)}>🗑</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── CONTATO & RODAPÉ ── */}
+      {sub==="contato" && (
+        <div style={{display:"flex",flexDirection:"column",gap:20}}>
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>📍 Informações de Contato</h3>
+            <div className="grid-2" style={{gap:16}}>
+              {[
+                ["contato_endereco","Endereço completo","Rua das Flores, 123 – Centro – Cidade/UF","text"],
+                ["contato_cep","CEP","00000-000","text"],
+                ["contato_telefone","Telefone / WhatsApp","(00) 00000-0000","text"],
+                ["contato_email","E-mail de contato","contato@institutomailrda.org.br","email"],
+                ["contato_horario","Horário de atendimento","Segunda a Sexta: 8h às 17h | Sábado: 8h às 12h","text"],
+                ["contato_instagram","Instagram (link completo)","https://instagram.com/...","text"],
+                ["contato_facebook","Facebook (link completo)","https://facebook.com/...","text"],
+              ].map(([k,l,ph,t]) => (
+                <div key={k} className="form-group">
+                  <label className="form-label">{l}</label>
+                  <input type={t} style={inputStyle} value={siteText[k]||""} onChange={e=>setSiteText({...siteText,[k]:e.target.value})} placeholder={ph} />
+                </div>
+              ))}
+              <div className="form-group" style={{gridColumn:"1/-1"}}>
+                <label className="form-label">Link do Mapa (Google Maps embed)</label>
+                <input style={inputStyle} value={siteText.contato_mapa||""} onChange={e=>setSiteText({...siteText,contato_mapa:e.target.value})} placeholder="https://www.google.com/maps/embed?pb=..." />
+                <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Google Maps → Compartilhar → Incorporar um mapa → copie o src do iframe</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{padding:28}}>
+            <h3 style={{fontWeight:800,color:"var(--navy)",marginBottom:16,fontSize:18}}>🏠 Rodapé do Site</h3>
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              <div className="form-group">
+                <label className="form-label">Texto descritivo no rodapé</label>
+                <textarea style={textareaStyle} value={siteText.footer_texto||""} onChange={e=>setSiteText({...siteText,footer_texto:e.target.value})} placeholder="Breve descrição do Instituto para o rodapé..." />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Texto de direitos / copyright</label>
+                <input style={inputStyle} value={siteText.footer_copyright||""} onChange={e=>setSiteText({...siteText,footer_copyright:e.target.value})} placeholder={`© ${new Date().getFullYear()} Instituto Marilda Brandão — Todos os direitos reservados`} />
+              </div>
+            </div>
+          </div>
+
+          <button className="btn btn-gold" style={{alignSelf:"flex-start",fontSize:15,padding:"12px 32px"}} onClick={saveSiteText}>
+            💾 Salvar Contato & Rodapé
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function Admin({ go, logout, toast }) {
   const [tab, setTab] = useState("cadastros");
@@ -2035,7 +2459,7 @@ function Admin({ go, logout, toast }) {
 
   const stats = { total:users.length, pending:users.filter(u=>u.status==="pending").length, approved:users.filter(u=>u.status==="approved").length, rejected:users.filter(u=>u.status==="rejected").length };
 
-  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],["config","⚙️ Configurações"]];
+  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"],["conteudo","🌐 Conteúdo do Site"],["config","⚙️ Configurações"]];
 
   return (
     <>
@@ -2765,6 +3189,8 @@ function Admin({ go, logout, toast }) {
         )}
 
         {/* ── CONFIGURAÇÕES ── */}
+        {tab==="conteudo" && <TabConteudo toast={toast} />}
+
         {tab==="config" && (
           <div className="fade-in">
             <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>⚙️ Configurações do Site</h1>
