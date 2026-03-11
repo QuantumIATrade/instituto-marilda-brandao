@@ -1674,7 +1674,7 @@ function Dashboard({ user, go, logout }) {
     DB.getUser(user.id).then(fresh => {
       if (fresh) setUserData(fresh);
     });
-  }, [user.email]);
+  }, [user.id]);
   const usedCount = Object.keys(userData.usedQrCodes||{}).length;
   const qrCount = Object.keys(userData.qrCodes||{}).length;
   return (
