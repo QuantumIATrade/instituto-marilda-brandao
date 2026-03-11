@@ -60,6 +60,36 @@ a{color:var(--blue);text-decoration:none}
 @media(max-width:900px){.grid-3{grid-template-columns:repeat(2,1fr)}.grid-4{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
 
+/* ── MOBILE ── */
+@media(max-width:768px){
+  .nav{padding:0 16px;height:56px}
+  .nav-links{display:none;position:fixed;top:56px;left:0;right:0;bottom:0;background:var(--navy);
+    flex-direction:column;align-items:flex-start;padding:20px;gap:4px;z-index:99;overflow-y:auto}
+  .nav-links.open{display:flex}
+  .nav-actions{display:none}
+  .nav-hamburger{display:flex;flex-direction:column;gap:5px;cursor:pointer;padding:8px;background:none;border:none}
+  .nav-hamburger span{display:block;width:22px;height:2px;background:#fff;border-radius:2px;transition:.3s}
+  .hero{padding:72px 16px 32px;min-height:auto}
+  .hero .container{grid-template-columns:1fr!important;gap:24px!important;text-align:center}
+  .hero .container > div:last-child{display:none}
+  .hero-btns{justify-content:center!important}
+  .section{padding:48px 16px}
+  .section-title{font-size:28px}
+  .impact-bar{padding:28px 16px}
+  .impact-num{font-size:36px}
+  .donate-box{padding:28px 16px;border-radius:16px}
+  .footer{padding:32px 16px 20px}
+  .modal{padding:20px;border-radius:16px}
+  .dash-header{padding:20px 16px}
+  .sidebar{transform:translateX(-100%);transition:.3s;z-index:200}
+  .sidebar.open{transform:translateX(0)}
+  .admin-content{margin-left:0!important;padding:16px}
+  .admin-topbar{display:flex!important}
+  .tbl{display:block;overflow-x:auto;white-space:nowrap}
+  .grid-2{grid-template-columns:1fr}
+  .pix-key{font-size:13px;letter-spacing:0}
+}`;
+
 /* IMPACT BAR */
 .impact-bar{background:linear-gradient(135deg,var(--gold),var(--gold2));padding:40px 32px}
 .impact-num{font-family:'Barlow Condensed',sans-serif;font-size:48px;font-weight:900;color:var(--navy);line-height:1}
@@ -419,8 +449,31 @@ function Home({ go }) {
   const [showPix, setShowPix] = useState(false);
   const [showVol, setShowVol] = useState(false);
   const [toast, setToast] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const showToast = (msg, type = "info") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3200); };
   const [donGoal] = useState(() => JSON.parse(localStorage.getItem("imb_donation_goal") || JSON.stringify({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" })));
+  const scrollTo = (id) => { document.getElementById(id)?.scrollIntoView({behavior:"smooth"}); setMenuOpen(false); };
+  useEffect(() => {
+    const handleResize = () => {
+      const hamburger = document.querySelector(".nav-hamburger");
+      const desktopLinks = document.getElementById("nav-desktop");
+      const navActions = document.querySelector(".nav-actions");
+      if (!hamburger) return;
+      if (window.innerWidth <= 768) {
+        hamburger.style.display = "flex";
+        if (desktopLinks) desktopLinks.style.display = "none";
+        if (navActions) navActions.style.display = "none";
+      } else {
+        hamburger.style.display = "none";
+        setMenuOpen(false);
+        if (desktopLinks) desktopLinks.style.display = "flex";
+        if (navActions) navActions.style.display = "flex";
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
   const programs = [
     { icon: "📚", title: "Reforço Escolar", desc: "Apoio pedagógico para crianças com dificuldades de aprendizado" },
     { icon: "💻", title: "Inclusão Digital", desc: "Cursos de informática e acesso à tecnologia" },
@@ -445,14 +498,31 @@ function Home({ go }) {
       {/* NAVBAR */}
       <nav className="nav">
         <IMBLogo variant="nav" />
-        <div style={{display:"flex",gap:4}}>
+        {/* Desktop links */}
+        <div style={{display:"flex",gap:4}} className="nav-links-desktop" id="nav-desktop">
           {[["Sobre","sobre"],["Programas","programas"],["Galeria","galeria"],["Transparência","transparencia"],["Contato","contato"]].map(([l,id]) => (
-            <button key={id} className="nl" onClick={() => document.getElementById(id)?.scrollIntoView({behavior:"smooth"})}>{l}</button>
+            <button key={id} className="nl" onClick={() => scrollTo(id)}>{l}</button>
           ))}
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8}} className="nav-actions">
           <button className="btn btn-out btn-sm" onClick={() => go("login")}>Entrar</button>
           <button className="btn btn-gold btn-sm" onClick={() => go("register")}>Cadastrar-se</button>
+        </div>
+        {/* Hamburger */}
+        <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)} style={{display:"none"}}>
+          <span style={{transform:menuOpen?"rotate(45deg) translate(5px,5px)":"none"}}/>
+          <span style={{opacity:menuOpen?0:1}}/>
+          <span style={{transform:menuOpen?"rotate(-45deg) translate(5px,-5px)":"none"}}/>
+        </button>
+        {/* Mobile menu */}
+        <div className={`nav-links${menuOpen?" open":""}`}>
+          {[["Sobre","sobre"],["Programas","programas"],["Galeria","galeria"],["Transparência","transparencia"],["Contato","contato"]].map(([l,id]) => (
+            <button key={id} className="nl" style={{fontSize:16,padding:"12px 8px",width:"100%",textAlign:"left"}} onClick={() => scrollTo(id)}>{l}</button>
+          ))}
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:16,width:"100%"}}>
+            <button className="btn btn-out" style={{justifyContent:"center"}} onClick={() => { go("login"); setMenuOpen(false); }}>Entrar</button>
+            <button className="btn btn-gold" style={{justifyContent:"center"}} onClick={() => { go("register"); setMenuOpen(false); }}>Cadastrar-se</button>
+          </div>
         </div>
       </nav>
 
@@ -464,9 +534,9 @@ function Home({ go }) {
             <p style={{marginTop:24,fontSize:18,lineHeight:1.7,color:"rgba(255,255,255,.8)"}}>
               Transformando vidas através da educação, inclusão e solidariedade. Cada criança merece uma oportunidade de crescer com dignidade.
             </p>
-            <div style={{display:"flex",gap:12,marginTop:32,flexWrap:"wrap"}}>
+            <div className="hero-btns" style={{display:"flex",gap:12,marginTop:32,flexWrap:"wrap"}}>
               <button className="btn btn-gold" onClick={() => setShowPix(true)}>💛 Fazer Doação</button>
-              <button className="btn btn-out" onClick={() => document.getElementById("sobre")?.scrollIntoView({behavior:"smooth"})}>Saiba Mais</button>
+              <button className="btn btn-out" onClick={() => scrollTo("sobre")}>Saiba Mais</button>
               <button className="btn btn-out" onClick={() => go("register")}>Cadastrar Família</button>
             </div>
           </div>
@@ -1150,6 +1220,7 @@ function Dashboard({ user, go, logout }) {
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 function Admin({ go, logout, toast }) {
   const [tab, setTab] = useState("cadastros");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [users, setUsers] = useState([]);
   const [events, setEvents] = useState([]);
   const [volunteers, setVolunteers] = useState([]);
@@ -1320,11 +1391,22 @@ function Admin({ go, logout, toast }) {
   return (
     <>
       <style>{CSS}</style>
-      <div className="sidebar">
+      {/* Mobile topbar */}
+      <div className="admin-topbar" style={{display:"none",position:"fixed",top:0,left:0,right:0,height:56,background:"var(--navy)",zIndex:150,alignItems:"center",padding:"0 16px",gap:12,boxShadow:"0 2px 12px rgba(0,0,0,.3)"}}>
+        <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{background:"none",display:"flex",flexDirection:"column",gap:5,padding:4}}>
+          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
+          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
+          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
+        </button>
+        <IMBLogo variant="nav" />
+      </div>
+      {/* Sidebar overlay on mobile */}
+      {sidebarOpen && <div onClick={() => setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:190}} />}
+      <div className={`sidebar${sidebarOpen?" open":""}`}>
         <div style={{padding:"20px 20px 12px"}}><IMBLogo variant="nav" /></div>
         <div style={{padding:"8px 0"}}>
           {tabs.map(([id, label]) => (
-            <div key={id} className={`sidebar-link${tab===id?" active":""}`} onClick={() => setTab(id)}>{label}</div>
+            <div key={id} className={`sidebar-link${tab===id?" active":""}`} onClick={() => { setTab(id); setSidebarOpen(false); }}>{label}</div>
           ))}
         </div>
         <div style={{position:"absolute",bottom:0,left:0,right:0,padding:16,borderTop:"1px solid rgba(255,255,255,.1)"}}>
@@ -1333,7 +1415,8 @@ function Admin({ go, logout, toast }) {
         </div>
       </div>
 
-      <div className="admin-content">
+      <div className="admin-content" style={{paddingTop:"env(safe-area-inset-top)"}}>
+        <style>{`@media(max-width:768px){.admin-content{padding-top:72px!important}}`}</style>
         {/* ── CADASTROS ── */}
         {tab==="cadastros" && (
           <div className="fade-in">
