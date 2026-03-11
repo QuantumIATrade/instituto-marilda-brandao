@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // ─── ESTILOS ────────────────────────────────────────────────────────────────
 const CSS = `
@@ -1643,7 +1643,6 @@ function Admin({ go, logout, toast }) {
             <div className="card" style={{padding:24,marginBottom:24}}>
               <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:20}}>📈 Progresso por Evento</h3>
               {events.map(ev => {
-                const approved = users.filter(u=>u.status==="approved");
                 const withQr = users.filter(u=>u.qrCodes?.[ev.id]).length;
                 const used = users.filter(u=>u.usedQrCodes?.[ev.id]).length;
                 const pct = withQr > 0 ? Math.round(used/withQr*100) : 0;
