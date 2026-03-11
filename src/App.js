@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -13,6 +14,7 @@ const firebaseConfig = {
 };
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
+const storage = getStorage(fbApp);
 
 // ─── DB HELPERS ──────────────────────────────────────────────────────────────
 const DB = {
@@ -31,6 +33,26 @@ const DB = {
   async getCollaborators() { const s = await getDocs(collection(db,"collaborators")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveCollaborator(c) { const {id,...data}=c; await setDoc(doc(db,"collaborators",id),data); },
   async updateCollaborator(id,data) { await updateDoc(doc(db,"collaborators",id),data); },
+  async getDonations() { const s = await getDocs(collection(db,"donations")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveDonation(d) { await addDoc(collection(db,"donations"),d); },
+  async deleteDonation(id) { await deleteDoc(doc(db,"donations",id)); },
+  async getAnnouncements() { const s = await getDocs(collection(db,"announcements")); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveAnnouncement(a) { const {id,...data}=a; await setDoc(doc(db,"announcements",id),data); },
+  async deleteAnnouncement(id) { await deleteDoc(doc(db,"announcements",id)); },
+  async uploadEventPhoto(eventId, file) {
+    const r = ref(storage, `events/${eventId}/${Date.now()}_${file.name}`);
+    const snap = await uploadBytes(r, file);
+    return await getDownloadURL(snap.ref);
+  },
+  async getEventPhotos(eventId) { const s = await getDocs(collection(db,`event_photos_${eventId}`)); return s.docs.map(d=>({...d.data(),id:d.id})); },
+  async saveEventPhoto(eventId, p) { await addDoc(collection(db,`event_photos_${eventId}`),p); },
+  // EmailJS (configure at emailjs.com)
+  async sendEmail(to, subject, body) {
+    try {
+      if (!window.emailjs) return; // silently skip if not configured
+      await window.emailjs.send("SERVICE_ID","TEMPLATE_ID",{ to_email:to, subject, message:body });
+    } catch(e) { console.warn("Email não enviado:",e); }
+  },
   // Realtime listeners
   onUsers(cb) { return onSnapshot(collection(db,"users"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
   onEvents(cb) { return onSnapshot(collection(db,"events"), s => cb(s.docs.map(d=>({...d.data(),id:d.id})))); },
@@ -942,7 +964,7 @@ function Home({ go }) {
 
 // ─── REGISTER ────────────────────────────────────────────────────────────────
 function Register({ go, toast }) {
-  const [f, setF] = useState({ name:"",email:"",cpf:"",phone:"",birthdate:"",address:"",city:"",state:"",children:"0",childrenNames:"",reason:"",howKnew:"",photoUrl:"",password:"",confirm:"" });
+  const [f, setF] = useState({ name:"",email:"",cpf:"",phone:"",birthdate:"",address:"",neighborhood:"",city:"",state:"",children:"0",childrenNames:"",reason:"",howKnew:"",photoUrl:"",password:"",confirm:"" });
   const set = k => e => setF({...f,[k]:e.target.value});
   const handleSubmit = async () => {
     if (!f.name||!f.email||!f.password) { toast("Preencha todos os campos obrigatórios","error"); return; }
@@ -976,6 +998,10 @@ function Register({ go, toast }) {
               <div className="form-group">
                 <label className="form-label">Cidade</label>
                 <input className="form-input" value={f.city} onChange={set("city")} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Bairro</label>
+                <input className="form-input" value={f.neighborhood} onChange={set("neighborhood")} placeholder="Ex: Centro, Vila Nova..." />
               </div>
               <div className="form-group">
                 <label className="form-label">Estado</label>
@@ -1153,8 +1179,10 @@ function EventCalendar({ events }) {
 function Dashboard({ user, go, logout }) {
   const [userData, setUserData] = useState(user);
   const [events, setEvents] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   useEffect(() => {
     DB.getEvents().then(evs => setEvents(evs));
+    DB.getAnnouncements().then(anns => setAnnouncements(anns.filter(a => !a.expiresAt || new Date(a.expiresAt) >= new Date())));
     DB.getUsers().then(users => {
       const fresh = users.find(u => u.email === user.email);
       if (fresh) setUserData(fresh);
@@ -1219,6 +1247,22 @@ function Dashboard({ user, go, logout }) {
               <EventCalendar events={events} />
             </div>
           </div>
+          {/* Announcements */}
+          {announcements.length > 0 && (
+            <div style={{marginBottom:24}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:12}}>📢 Avisos do Instituto</h3>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {announcements.map(a => (
+                  <div key={a.id} style={{padding:"14px 18px",borderRadius:12,borderLeft:`4px solid ${a.priority==="urgente"?"#ef4444":a.priority==="importante"?"#f59e0b":"#3b82f6"}`,
+                    background:a.priority==="urgente"?"#fee2e2":a.priority==="importante"?"#fef9c3":"var(--sky)"}}>
+                    <div style={{fontWeight:800,fontSize:15,marginBottom:4,color:"#0a2d6e"}}>{a.title}</div>
+                    <div style={{fontSize:14,color:"#475569",lineHeight:1.6}}>{a.body}</div>
+                    <div style={{fontSize:11,color:"#94a3b8",marginTop:6}}>{a.createdAt}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {/* QR Codes */}
           {events.length > 0 && (
             <div className="card" style={{padding:24}}>
@@ -1514,6 +1558,12 @@ function Admin({ go, logout, toast }) {
   const [events, setEvents] = useState([]);
   const [volunteers, setVolunteers] = useState([]);
   const [collaborators, setCollaborators] = useState([]);
+  const [donations, setDonations] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [newDonation, setNewDonation] = useState({ donor:"", amount:"", method:"PIX", date:"", note:"" });
+  const [newAnnouncement, setNewAnnouncement] = useState({ title:"", body:"", priority:"normal", expiresAt:"" });
+  const [eventPhotos, setEventPhotos] = useState({});
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [selUser, setSelUser] = useState(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
@@ -1548,6 +1598,18 @@ function Admin({ go, logout, toast }) {
       setDonGoal(goal);
       const cols = await DB.getCollaborators();
       setCollaborators(cols);
+      const dons = await DB.getDonations();
+      setDonations(dons);
+      const anns = await DB.getAnnouncements();
+      setAnnouncements(anns);
+      // Load photos for all events
+      if (evs.length > 0) {
+        const photos = {};
+        for (const ev of evs) {
+          photos[ev.id] = await DB.getEventPhotos(ev.id);
+        }
+        setEventPhotos(photos);
+      }
     };
     loadData();
     // Real-time listener for users
@@ -1563,7 +1625,56 @@ function Admin({ go, logout, toast }) {
     setUsers(prev => prev.map(u => u.id===id ? {...u, status:"approved"} : u));
     const u = users.find(u => u.id===id);
     toast(`✅ ${u?.name} aprovado!`, "success");
+    const siteUrl = "https://instituto-marilda-brandao-zfm5.vercel.app";
+    // Email notification
+    if (u?.email) {
+      await DB.sendEmail(u.email, "Cadastro Aprovado - Instituto Marilda Brandão",
+        `Olá ${u.name?.split(" ")[0]}! Seu cadastro foi aprovado. Acesse ${siteUrl} para entrar na sua área.`);
+    }
+    // WhatsApp notification
+    if (u?.phone) {
+      const phone = u.phone.replace(/\D/g,"");
+      const msg = encodeURIComponent(`Olá ${u.name?.split(" ")[0]}! 🎉 Seu cadastro no Instituto Marilda Brandão foi *aprovado*! Acesse: ${siteUrl}`);
+      window.open(`https://wa.me/55${phone}?text=${msg}`, "_blank");
+    }
   };
+  const exportCSV = (data, filename) => {
+    if (!data.length) { toast("Nenhum dado para exportar","error"); return; }
+    const keys = Object.keys(data[0]).filter(k => !["password","id"].includes(k));
+    const csv = [keys.join(";"), ...data.map(row => keys.map(k => `"${String(row[k]||"").replace(/"/g,'""')}"`).join(";"))].join("\n");
+    const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download=filename; a.click();
+    URL.revokeObjectURL(url);
+    toast("✅ CSV exportado!","success");
+  };
+
+  const printEventList = (ev) => {
+    const eligible = users.filter(u => u.status==="approved");
+    const w = window.open("","_blank");
+    w.document.write(`<html><head><title>Lista - ${ev.label}</title>
+    <style>body{font-family:Arial,sans-serif;padding:32px}h1{color:#0a2d6e}table{width:100%;border-collapse:collapse}
+    th{background:#0a2d6e;color:#fff;padding:8px 12px;text-align:left}td{padding:8px 12px;border-bottom:1px solid #ddd}
+    .badge{padding:3px 8px;border-radius:8px;font-size:11px;font-weight:700}
+    .ok{background:#dcfce7;color:#166534}.pending{background:#fef9c3;color:#854d0e}
+    @media print{button{display:none}}</style></head><body>
+    <h1>${ev.icon} ${ev.label}</h1>
+    <p>Data: ${new Date(ev.date).toLocaleDateString("pt-BR")} | Total beneficiários: ${eligible.length}</p>
+    <button onclick="window.print()" style="margin-bottom:16px;padding:8px 20px;background:#0a2d6e;color:#fff;border:none;border-radius:6px;cursor:pointer">🖨️ Imprimir</button>
+    <table><thead><tr><th>#</th><th>Nome</th><th>Cidade</th><th>Crianças</th><th>QR Code</th><th>Status</th><th>Assinatura</th></tr></thead><tbody>
+    ${eligible.map((u,i) => `<tr>
+      <td>${i+1}</td><td><strong>${u.name}</strong></td><td>${u.city||"-"}</td>
+      <td style="text-align:center">${u.children||0}</td>
+      <td style="font-size:11px;font-family:monospace">${u.qrCodes?.[ev.id]?.slice(0,20)+"..." || "Sem QR"}</td>
+      <td><span class="badge ${u.usedQrCodes?.[ev.id]?"ok":"pending"}">${u.usedQrCodes?.[ev.id]?"✓ Entregue":"Pendente"}</span></td>
+      <td style="border-bottom:1px solid #999;min-width:120px"></td>
+    </tr>`).join("")}
+    </tbody></table>
+    <p style="margin-top:32px;font-size:12px;color:#888">Gerado em ${new Date().toLocaleString("pt-BR")} · Instituto Marilda Brandão</p>
+    </body></html>`);
+    w.document.close();
+  };
+
   const rejectUser = async (id) => {
     await DB.updateUser(id, { status:"rejected" });
     setUsers(prev => prev.map(u => u.id===id ? {...u, status:"rejected"} : u));
@@ -1688,7 +1799,7 @@ function Admin({ go, logout, toast }) {
 
   const stats = { total:users.length, pending:users.filter(u=>u.status==="pending").length, approved:users.filter(u=>u.status==="approved").length, rejected:users.filter(u=>u.status==="rejected").length };
 
-  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"]];
+  const tabs = [["cadastros","👥 Cadastros"],["validar","🔲 Validar QR"],["distribuir","📤 Distribuir QR"],["eventos","🎁 Eventos"],["colaboradores","🤝 Colaboradores"],["doacoes","💰 Doações"],["avisos","📢 Avisos"],["voluntarios","💚 Voluntários"],["stats","📊 Estatísticas"]];
 
   return (
     <>
@@ -1731,11 +1842,12 @@ function Admin({ go, logout, toast }) {
                 </div>
               ))}
             </div>
-            <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+            <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
               <input className="form-input" style={{maxWidth:280}} placeholder="🔍 Buscar por nome ou email..." value={search} onChange={e=>setSearch(e.target.value)} />
               <select className="form-select" style={{width:"auto"}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
                 <option value="all">Todos</option><option value="pending">Pendentes</option><option value="approved">Aprovados</option><option value="rejected">Rejeitados</option>
               </select>
+              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(filtered.map(({password,...u})=>u), "cadastros.csv")}>📤 Exportar CSV</button>
             </div>
             <div className="card" style={{overflow:"hidden"}}>
               <table className="tbl">
@@ -1964,6 +2076,33 @@ function Admin({ go, logout, toast }) {
                       <div style={{background:"#f1f5f9",borderRadius:8,height:8}}>
                         <div style={{background:"var(--gold)",height:8,borderRadius:8,width:`${total>0?Math.round(used/total*100):0}%`,transition:".3s"}} />
                       </div>
+                      {/* Photo upload per event */}
+                      <div style={{marginTop:12,borderTop:"1px solid #f1f5f9",paddingTop:10}}>
+                        <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:6}}>📸 Fotos do evento</div>
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+                          {(eventPhotos[ev.id]||[]).map((p,i) => (
+                            <img key={i} src={p.url} alt="evento" style={{width:60,height:60,objectFit:"cover",borderRadius:8,border:"2px solid var(--gold3)"}} />
+                          ))}
+                        </div>
+                        <label style={{cursor:"pointer"}}>
+                          <span className="btn btn-sm" style={{background:"#f1f5f9",color:"#64748b",fontSize:11,padding:"4px 10px"}}>
+                            {uploadingPhoto?"Enviando...":"📸 Adicionar foto"}
+                          </span>
+                          <input type="file" accept="image/*" style={{display:"none"}} onChange={async e => {
+                            const file = e.target.files[0];
+                            if (!file) return;
+                            setUploadingPhoto(true);
+                            try {
+                              const url = await DB.uploadEventPhoto(ev.id, file);
+                              const photoEntry = { url, uploadedAt: new Date().toLocaleString("pt-BR") };
+                              await DB.saveEventPhoto(ev.id, photoEntry);
+                              setEventPhotos(prev => ({ ...prev, [ev.id]: [...(prev[ev.id]||[]), photoEntry] }));
+                              toast("📸 Foto adicionada!", "success");
+                            } catch { toast("Erro ao enviar foto","error"); }
+                            setUploadingPhoto(false);
+                          }} />
+                        </label>
+                      </div>
                     </div>
                   );
                 })}
@@ -2001,6 +2140,14 @@ function Admin({ go, logout, toast }) {
                               await DB.updateCollaborator(c.id, { status:"approved" });
                               setCollaborators(prev => prev.map(x => x.id===c.id ? {...x,status:"approved"} : x));
                               toast(`✅ ${c.name} aprovado!`, "success");
+                              const siteUrl = "https://instituto-marilda-brandao-zfm5.vercel.app";
+                              if (c.email) await DB.sendEmail(c.email, "Acesso Aprovado - Instituto Marilda Brandão",
+                                `Olá ${c.name?.split(" ")[0]}! Seu acesso como colaborador foi aprovado. Acesse ${siteUrl} e faça login na aba Colaborador.`);
+                              if (c.phone) {
+                                const phone = c.phone.replace(/\D/g,"");
+                                const msg = encodeURIComponent(`Olá ${c.name?.split(" ")[0]}! 🎉 Seu cadastro como colaborador no Instituto Marilda Brandão foi *aprovado*! Acesse: ${siteUrl}`);
+                                window.open(`https://wa.me/55${phone}?text=${msg}`, "_blank");
+                              }
                             }}>✓ Aprovar</button>
                           )}
                           {c.status!=="rejected" && (
@@ -2016,6 +2163,145 @@ function Admin({ go, logout, toast }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── DOAÇÕES ── */}
+        {tab==="doacoes" && (
+          <div className="fade-in">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12,marginBottom:20}}>
+              <div>
+                <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>💰 Controle de Doações</h1>
+                <p style={{color:"#64748b"}}>{donations.length} doação(ões) registrada(s)</p>
+              </div>
+              <button className="btn btn-blue btn-sm" onClick={() => exportCSV(donations,"doacoes.csv")}>📤 Exportar CSV</button>
+            </div>
+            {/* Summary cards */}
+            {(() => {
+              const total = donations.reduce((s,d) => s+parseFloat(d.amount||0),0);
+              const byMethod = donations.reduce((a,d) => { a[d.method]=(a[d.method]||0)+parseFloat(d.amount||0); return a; },{});
+              return (
+                <div className="grid-4" style={{marginBottom:24}}>
+                  <div className="card" style={{padding:16,borderLeft:"4px solid #22c55e"}}>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:28,fontWeight:900,color:"#0a2d6e"}}>R$ {total.toLocaleString("pt-BR",{minimumFractionDigits:2})}</div>
+                    <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>Total Arrecadado</div>
+                  </div>
+                  {Object.entries(byMethod).map(([m,v]) => (
+                    <div key={m} className="card" style={{padding:16,borderLeft:"4px solid #3b82f6"}}>
+                      <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:24,fontWeight:900,color:"#0a2d6e"}}>R$ {v.toLocaleString("pt-BR",{minimumFractionDigits:2})}</div>
+                      <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>{m}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            {/* Add donation form */}
+            <div className="card" style={{padding:24,marginBottom:20,borderLeft:"4px solid #f5c842"}}>
+              <h3 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,color:"#0a2d6e",marginBottom:16}}>+ Registrar Doação</h3>
+              <div className="grid-2">
+                <div className="form-group"><label className="form-label">Doador (ou "Anônimo")</label>
+                  <input className="form-input" value={newDonation.donor} onChange={e=>setNewDonation({...newDonation,donor:e.target.value})} placeholder="Nome do doador" /></div>
+                <div className="form-group"><label className="form-label">Valor (R$)</label>
+                  <input className="form-input" type="number" value={newDonation.amount} onChange={e=>setNewDonation({...newDonation,amount:e.target.value})} placeholder="0,00" /></div>
+                <div className="form-group"><label className="form-label">Método</label>
+                  <select className="form-select" value={newDonation.method} onChange={e=>setNewDonation({...newDonation,method:e.target.value})}>
+                    <option>PIX</option><option>Dinheiro</option><option>Transferência</option><option>Boleto</option><option>Cartão</option><option>Outro</option>
+                  </select></div>
+                <div className="form-group"><label className="form-label">Data</label>
+                  <input className="form-input" type="date" value={newDonation.date} onChange={e=>setNewDonation({...newDonation,date:e.target.value})} /></div>
+                <div className="form-group" style={{gridColumn:"1/-1"}}><label className="form-label">Observação</label>
+                  <input className="form-input" value={newDonation.note} onChange={e=>setNewDonation({...newDonation,note:e.target.value})} placeholder="Opcional..." /></div>
+              </div>
+              <button className="btn btn-gold" onClick={async () => {
+                if (!newDonation.donor||!newDonation.amount) { toast("Preencha doador e valor","error"); return; }
+                const entry = { ...newDonation, id:`D${Date.now()}`, registeredAt:new Date().toLocaleString("pt-BR") };
+                await DB.saveDonation(entry);
+                setDonations(prev => [...prev, entry]);
+                setNewDonation({ donor:"",amount:"",method:"PIX",date:"",note:"" });
+                toast("✅ Doação registrada!","success");
+              }}>💾 Salvar Doação</button>
+            </div>
+            {/* Donations table */}
+            <div className="card" style={{overflow:"hidden"}}>
+              <table className="tbl">
+                <thead><tr><th>Doador</th><th>Valor</th><th>Método</th><th>Data</th><th>Observação</th><th>Ação</th></tr></thead>
+                <tbody>
+                  {donations.length===0 ? (
+                    <tr><td colSpan={6} style={{textAlign:"center",padding:32,color:"#94a3b8"}}>Nenhuma doação registrada</td></tr>
+                  ) : [...donations].reverse().map(d => (
+                    <tr key={d.id}>
+                      <td style={{fontWeight:700}}>{d.donor}</td>
+                      <td style={{color:"#22c55e",fontWeight:800}}>R$ {parseFloat(d.amount).toLocaleString("pt-BR",{minimumFractionDigits:2})}</td>
+                      <td><span className="badge badge-blue">{d.method}</span></td>
+                      <td style={{fontSize:13,color:"#64748b"}}>{d.date ? new Date(d.date).toLocaleDateString("pt-BR") : "-"}</td>
+                      <td style={{fontSize:13,color:"#64748b"}}>{d.note||"-"}</td>
+                      <td><button className="btn btn-red btn-sm" style={{padding:"3px 8px",fontSize:11}} onClick={async () => {
+                        await DB.deleteDonation(d.id);
+                        setDonations(prev => prev.filter(x=>x.id!==d.id));
+                        toast("Doação removida","error");
+                      }}>🗑</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── AVISOS ── */}
+        {tab==="avisos" && (
+          <div className="fade-in">
+            <h1 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,color:"#0a2d6e",marginBottom:4}}>📢 Mural de Avisos</h1>
+            <p style={{color:"#64748b",marginBottom:20}}>Os avisos aparecem para as famílias na área de acesso delas</p>
+            {/* Add announcement form */}
+            <div className="card" style={{padding:24,marginBottom:20,borderLeft:"4px solid #f5c842"}}>
+              <h3 style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:20,color:"#0a2d6e",marginBottom:16}}>+ Novo Aviso</h3>
+              <div className="form-group"><label className="form-label">Título *</label>
+                <input className="form-input" value={newAnnouncement.title} onChange={e=>setNewAnnouncement({...newAnnouncement,title:e.target.value})} placeholder="Ex: Distribuição de cestas em 15/01" /></div>
+              <div className="form-group"><label className="form-label">Mensagem *</label>
+                <textarea className="form-input" rows={3} value={newAnnouncement.body} onChange={e=>setNewAnnouncement({...newAnnouncement,body:e.target.value})} placeholder="Detalhes do aviso..." style={{resize:"vertical"}} /></div>
+              <div className="grid-2">
+                <div className="form-group"><label className="form-label">Prioridade</label>
+                  <select className="form-select" value={newAnnouncement.priority} onChange={e=>setNewAnnouncement({...newAnnouncement,priority:e.target.value})}>
+                    <option value="normal">Normal</option><option value="importante">⚠️ Importante</option><option value="urgente">🚨 Urgente</option>
+                  </select></div>
+                <div className="form-group"><label className="form-label">Expira em (opcional)</label>
+                  <input className="form-input" type="date" value={newAnnouncement.expiresAt} onChange={e=>setNewAnnouncement({...newAnnouncement,expiresAt:e.target.value})} /></div>
+              </div>
+              <button className="btn btn-gold" onClick={async () => {
+                if (!newAnnouncement.title||!newAnnouncement.body) { toast("Preencha título e mensagem","error"); return; }
+                const entry = { ...newAnnouncement, id:`A${Date.now()}`, createdAt:new Date().toLocaleString("pt-BR") };
+                await DB.saveAnnouncement(entry);
+                setAnnouncements(prev => [...prev, entry]);
+                setNewAnnouncement({ title:"",body:"",priority:"normal",expiresAt:"" });
+                toast("✅ Aviso publicado!","success");
+              }}>📢 Publicar Aviso</button>
+            </div>
+            {/* List */}
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {announcements.length===0 ? (
+                <div className="card" style={{padding:32,textAlign:"center",color:"#94a3b8"}}>Nenhum aviso publicado</div>
+              ) : [...announcements].reverse().map(a => (
+                <div key={a.id} className="card" style={{padding:20,borderLeft:`4px solid ${a.priority==="urgente"?"#ef4444":a.priority==="importante"?"#f59e0b":"#3b82f6"}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                    <div>
+                      <div style={{fontWeight:800,fontSize:16,color:"#0a2d6e",marginBottom:4}}>{a.title}</div>
+                      <div style={{fontSize:14,color:"#475569",lineHeight:1.6}}>{a.body}</div>
+                      <div style={{marginTop:8,display:"flex",gap:8,alignItems:"center"}}>
+                        <span className={`badge badge-${a.priority==="urgente"?"red":a.priority==="importante"?"yellow":"blue"}`}>{a.priority}</span>
+                        <span style={{fontSize:12,color:"#94a3b8"}}>{a.createdAt}</span>
+                        {a.expiresAt && <span style={{fontSize:12,color:"#94a3b8"}}>· Expira: {new Date(a.expiresAt).toLocaleDateString("pt-BR")}</span>}
+                      </div>
+                    </div>
+                    <button className="btn btn-red btn-sm" style={{padding:"4px 10px",whiteSpace:"nowrap"}} onClick={async () => {
+                      await DB.deleteAnnouncement(a.id);
+                      setAnnouncements(prev => prev.filter(x=>x.id!==a.id));
+                      toast("Aviso removido","error");
+                    }}>🗑 Remover</button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -2106,17 +2392,93 @@ function Admin({ go, logout, toast }) {
                 const sorted = Object.entries(cidades).sort((a,b)=>b[1]-a[1]).slice(0,8);
                 const max = sorted[0]?.[1]||1;
                 return sorted.length===0 ? <p style={{color:"#94a3b8"}}>Nenhum dado disponível</p> : sorted.map(([city, count]) => (
-                  <div key={city} style={{marginBottom:10}}>
+                  <div key={city} style={{marginBottom:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:13}}>
-                      <span style={{fontWeight:700}}>{city}</span><span style={{color:"#64748b"}}>{count} família(s)</span>
+                      <span style={{fontWeight:700}}>📍 {city}</span>
+                      <span style={{color:"#64748b",fontWeight:700}}>{count} família(s) · {Math.round(count/users.filter(u=>u.status==="approved").length*100)}%</span>
                     </div>
-                    <div style={{background:"#f1f5f9",borderRadius:6,height:8}}>
-                      <div style={{background:"var(--blue)",height:8,borderRadius:6,width:`${Math.round(count/max*100)}%`,transition:".3s"}} />
+                    <div style={{background:"#f1f5f9",borderRadius:6,height:10}}>
+                      <div style={{background:`linear-gradient(90deg,var(--blue),var(--blue2))`,height:10,borderRadius:6,width:`${Math.round(count/max*100)}%`,transition:".3s"}} />
                     </div>
                   </div>
                 ));
               })()}
+              <button className="btn btn-blue btn-sm" style={{marginTop:16}} onClick={() => {
+                const data = users.filter(u=>u.status==="approved"&&u.city).map(u=>({nome:u.name,cidade:u.city,criancas:u.children||0}));
+                exportCSV(data,"distribuicao-cidades.csv");
+              }}>📤 Exportar por Cidade</button>
             </div>
+
+            {/* HEAT MAP BY BAIRRO */}
+            <div className="card" style={{padding:24,marginTop:24}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:4}}>🗺️ Mapa de Calor por Bairro</h3>
+              <p style={{color:"#64748b",fontSize:13,marginBottom:16}}>Tamanho e cor representam concentração de famílias</p>
+              {(() => {
+                const bairros = users.filter(u=>u.status==="approved"&&u.neighborhood).reduce((acc,u)=>{
+                  acc[u.neighborhood]=(acc[u.neighborhood]||0)+1; return acc;
+                },{});
+                const sorted = Object.entries(bairros).sort((a,b)=>b[1]-a[1]).slice(0,12);
+                const max = sorted[0]?.[1]||1;
+                const colors = ["#0a2d6e","#1155cc","#1a6fe8","#3b82f6","#60a5fa","#93c5fd","#bfdbfe","#dbeafe"];
+                if (sorted.length===0) return (
+                  <div style={{textAlign:"center",padding:32,color:"#94a3b8"}}>
+                    <div style={{fontSize:32,marginBottom:8}}>🗺️</div>
+                    <p>Cadastre o campo <strong>"Bairro"</strong> nas famílias para visualizar o mapa</p>
+                  </div>
+                );
+                return (
+                  <>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:16}}>
+                      {sorted.map(([bairro,count],i) => {
+                        const pct = count/max;
+                        const size = Math.max(60, Math.round(60+pct*80));
+                        const color = colors[Math.min(i, colors.length-1)];
+                        return (
+                          <div key={bairro} title={`${bairro}: ${count} família(s)`} style={{
+                            width:size,height:size,borderRadius:"50%",background:color,
+                            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                            color:"#fff",cursor:"default",transition:".2s",boxShadow:"0 4px 12px rgba(0,0,0,.2)",
+                            fontSize:Math.max(9,Math.round(9+pct*5)),fontWeight:800,textAlign:"center",padding:4
+                          }}>
+                            <div>{count}</div>
+                            <div style={{fontSize:Math.max(7,Math.round(7+pct*3)),opacity:.85,lineHeight:1.2}}>{bairro.split(" ")[0]}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button className="btn btn-blue btn-sm" onClick={() => {
+                      const data = users.filter(u=>u.status==="approved"&&u.neighborhood).map(u=>({nome:u.name,bairro:u.neighborhood,cidade:u.city||"",criancas:u.children||0}));
+                      exportCSV(data,"mapa-bairros.csv");
+                    }}>📤 Exportar por Bairro</button>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* RANKING COLABORADORES */}
+            <div className="card" style={{padding:24,marginTop:24}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:16}}>🏆 Ranking de Colaboradores</h3>
+              {(() => {
+                const ranking = qrHistory.reduce((acc,h) => {
+                  if (h.validatedBy) acc[h.validatedBy]=(acc[h.validatedBy]||0)+1;
+                  return acc;
+                },{});
+                const sorted = Object.entries(ranking).sort((a,b)=>b[1]-a[1]);
+                const medals = ["🥇","🥈","🥉"];
+                return sorted.length===0 ? <p style={{color:"#94a3b8"}}>Nenhuma validação registrada ainda</p> : (
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {sorted.map(([name,count],i) => (
+                      <div key={name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:i===0?"linear-gradient(135deg,#fef9c3,#fef3c7)":"var(--bg)",borderRadius:10,border:i===0?"2px solid var(--gold)":"1px solid var(--light)"}}>
+                        <span style={{fontSize:22}}>{medals[i]||"🎖"}</span>
+                        <span style={{fontWeight:800,flex:1}}>{name}</span>
+                        <span style={{background:"var(--navy)",color:"#fff",borderRadius:20,padding:"3px 12px",fontWeight:800,fontSize:13}}>{count} validações</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
             {/* DONATION GOAL MANAGER */}
             <div className="card" style={{padding:24,marginTop:24}}>
               <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:4}}>🎯 Meta de Doação</h3>
@@ -2224,6 +2586,17 @@ export default function App() {
   const [t, setT] = useState(null);
   const toast = (msg, type="info") => { setT({msg,type}); setTimeout(() => setT(null), 3200); };
   const logout = () => { setUser(null); setPage("home"); toast("Até logo! 👋","info"); };
+
+  useEffect(() => {
+    // Load EmailJS (configure SERVICE_ID and TEMPLATE_ID at emailjs.com for email notifications)
+    if (!window.emailjs) {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js";
+      s.onload = () => window.emailjs?.init("YOUR_PUBLIC_KEY"); // replace with your key
+      document.head.appendChild(s);
+    }
+  }, []);
+
   return (
     <>
       {t && <div className={`toast toast-${t.type}`} style={{fontFamily:"'Nunito',sans-serif"}}>{t.msg}</div>}
