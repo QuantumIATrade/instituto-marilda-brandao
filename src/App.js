@@ -102,12 +102,18 @@ const DB = {
   async saveSiteSettings(s) { await setDoc(doc(db,"settings","site"),s); },
   async getSuperAdminCreds() { const d = await getDoc(doc(db,"settings","super_admin")); return d.exists()?d.data():{ email:"admin@marildabrandao.org.br", password:"admin123" }; },
   async saveSuperAdminCreds(c) { await setDoc(doc(db,"settings","super_admin"),c); },
-  // EmailJS (configure at emailjs.com)
+  // EmailJS — usa chaves salvas no Firestore (settings/site)
   async sendEmail(to, subject, body) {
     try {
-      if (!window.emailjs) return; // silently skip if not configured
-      await window.emailjs.send("SERVICE_ID","TEMPLATE_ID",{ to_email:to, subject, message:body });
-    } catch(e) { console.warn("Email não enviado:",e); }
+      const settings = await this.getSiteSettings();
+      const pubKey = settings.emailjsPublicKey;
+      const serviceId = settings.emailjsServiceId;
+      const templateId = settings.emailjsTemplateId;
+      if (!pubKey || !serviceId || !templateId) throw new Error("EmailJS não configurado no painel admin (⚙️ Configurações)");
+      if (!window.emailjs) throw new Error("EmailJS não carregado ainda. Tente novamente em alguns segundos.");
+      window.emailjs.init(pubKey);
+      await window.emailjs.send(serviceId, templateId, { to_email:to, subject, message:body });
+    } catch(e) { console.warn("Email não enviado:", e); throw e; }
   },
   // Admins com permissões
   async getAdmins() { const s = await getDocs(collection(db,"admins")); return s.docs.map(d=>({...d.data(),id:d.id})); },
@@ -3490,7 +3496,62 @@ function Admin({ go, logout, toast, adminUser }) {
                 </label>
                 <p style={{fontSize:12,color:"#94a3b8",marginTop:8}}>A imagem abrirá em nova aba se o upload funcionar corretamente</p>
               </div>
-            )}
+            )}\n\n            {/* EmailJS */}
+            <div className="card" style={{padding:28,marginBottom:20,borderLeft:"4px solid #10b981"}}>
+              <h3 style={{fontWeight:800,color:"#0a2d6e",marginBottom:4}}>📧 EmailJS — Envio de E-mails</h3>
+              <p style={{color:"#64748b",fontSize:13,marginBottom:4}}>Usado para: recuperação de senha, notificações de cadastro.</p>
+              <p style={{color:"#64748b",fontSize:13,marginBottom:16}}>
+                Crie conta gratuita em <a href="https://www.emailjs.com" target="_blank" rel="noreferrer" style={{color:"#1155cc"}}>emailjs.com</a> → Email Services → Email Templates → Integration → Public Key.
+              </p>
+              <div className="grid-2" style={{gap:16,marginBottom:16}}>
+                <div className="form-group" style={{margin:0}}>
+                  <label className="form-label">Public Key</label>
+                  <input className="form-input" value={siteSettings.emailjsPublicKey||""}
+                    onChange={e=>setSiteSettings({...siteSettings,emailjsPublicKey:e.target.value})}
+                    placeholder="Ex: user_aBcDeFgHiJkLmNoP" />
+                </div>
+                <div className="form-group" style={{margin:0}}>
+                  <label className="form-label">Service ID</label>
+                  <input className="form-input" value={siteSettings.emailjsServiceId||""}
+                    onChange={e=>setSiteSettings({...siteSettings,emailjsServiceId:e.target.value})}
+                    placeholder="Ex: service_xxxxxxx" />
+                </div>
+                <div className="form-group" style={{margin:0}}>
+                  <label className="form-label">Template ID</label>
+                  <input className="form-input" value={siteSettings.emailjsTemplateId||""}
+                    onChange={e=>setSiteSettings({...siteSettings,emailjsTemplateId:e.target.value})}
+                    placeholder="Ex: template_xxxxxxx" />
+                </div>
+                <div style={{display:"flex",alignItems:"flex-end"}}>
+                  {siteSettings.emailjsPublicKey && siteSettings.emailjsServiceId && siteSettings.emailjsTemplateId
+                    ? <span style={{fontSize:13,color:"#22c55e",fontWeight:700}}>✅ Configurado</span>
+                    : <span style={{fontSize:13,color:"#f59e0b",fontWeight:700}}>⚠️ Não configurado</span>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+                <button className="btn btn-gold" onClick={async()=>{
+                  await DB.saveSiteSettings(siteSettings);
+                  // reinit emailjs with new key
+                  if (window.emailjs && siteSettings.emailjsPublicKey) window.emailjs.init(siteSettings.emailjsPublicKey);
+                  toast("EmailJS salvo!","success");
+                }}>💾 Salvar</button>
+                {siteSettings.emailjsPublicKey && siteSettings.emailjsServiceId && siteSettings.emailjsTemplateId && (
+                  <button className="btn" style={{background:"#e0f2fe",color:"#0369a1"}} onClick={async()=>{
+                    const testEmail = prompt("Digite um e-mail para teste:");
+                    if (!testEmail) return;
+                    try {
+                      await DB.sendEmail(testEmail,"Teste EmailJS - Instituto Marilda Brandão","Este é um e-mail de teste. Se chegou, o EmailJS está funcionando! 🎉");
+                      toast("E-mail de teste enviado!","success");
+                    } catch(e) { toast("Erro: "+e.message,"error"); }
+                  }}>🧪 Enviar e-mail de teste</button>
+                )}
+              </div>
+              <div style={{marginTop:14,padding:12,background:"#f0fdf4",borderRadius:8,fontSize:12,color:"#166534"}}>
+                <strong>Como configurar o template no EmailJS:</strong><br/>
+                Crie um template com as variáveis: <code>{"{{to_email}}"}</code>, <code>{"{{subject}}"}</code>, <code>{"{{message}}"}</code>
+              </div>
+            </div>
+
           </div>
         )}
 
