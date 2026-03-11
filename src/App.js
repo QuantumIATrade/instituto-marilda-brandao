@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -13,6 +14,20 @@ const firebaseConfig = {
 };
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
+const auth = getAuth(fbApp);
+
+// Helper: garante que o usuário existe no Firebase Auth (migração silenciosa)
+const ensureFirebaseAuth = async (email, password) => {
+  try {
+    return await signInWithEmailAndPassword(auth, email, password);
+  } catch(e) {
+    if (e.code === "auth/user-not-found" || e.code === "auth/invalid-credential") {
+      // Primeiro login: cria a conta no Firebase Auth
+      return await createUserWithEmailAndPassword(auth, email, password);
+    }
+    throw e;
+  }
+};
 
 // ── Upload de documentos via Cloudinary (pasta privada por userId)
 const uploadDocumento = async (userId, tipo, file, onProgress) => {
@@ -1137,6 +1152,8 @@ function Register({ go, toast }) {
         lgpdDate: new Date().toLocaleString("pt-BR"),
       };
       await DB.saveUser(newUser);
+      // Cria conta no Firebase Auth silenciosamente
+      try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth registro:", e.message); }
       setStep(3);
     } catch(err) {
       toast("Erro no envio: " + (err.message||"tente novamente"), "error");
@@ -1355,17 +1372,16 @@ function Login({ go, onLogin, toast }) {
     // Super admin — verifica Firestore, fallback para hardcoded
     const superCreds = await DB.getSuperAdminCreds();
     if (email === superCreds.email && pw === superCreds.password) {
+      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
       onLogin({ name:"Super Admin", email, role:"admin", superAdmin:true, permissions:"all" }); go("admin"); return;
     }
     // Admins cadastrados no Firestore
-    if (tab === "familia" || tab === "colaborador") {
-      // verifica se é admin cadastrado
-      const admins = await DB.getAdmins();
-      const adm = admins.find(a => a.email===email && a.password===pw);
-      if (adm) {
-        if (!adm.active) { toast("Acesso de administrador desativado","error"); return; }
-        onLogin({...adm, role:"admin", superAdmin:false}); go("admin"); return;
-      }
+    const admins = await DB.getAdmins();
+    const adm = admins.find(a => a.email===email && a.password===pw);
+    if (adm) {
+      if (!adm.active) { toast("Acesso de administrador desativado","error"); return; }
+      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
+      onLogin({...adm, role:"admin", superAdmin:false}); go("admin"); return;
     }
     if (tab === "colaborador") {
       const cols = await DB.getCollaborators();
@@ -1373,6 +1389,7 @@ function Login({ go, onLogin, toast }) {
       if (!c) { toast("E-mail ou senha incorretos","error"); return; }
       if (c.status==="pending") { toast("Cadastro aguardando aprovação do admin","error"); return; }
       if (c.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+      try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
       onLogin({...c, role:"collaborator"}); go("collaborator"); return;
     }
     const users = await DB.getUsers();
@@ -1380,6 +1397,7 @@ function Login({ go, onLogin, toast }) {
     if (!u) { toast("E-mail ou senha incorretos","error"); return; }
     if (u.status==="pending") { toast("Cadastro aguardando aprovação","error"); return; }
     if (u.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+    try { await ensureFirebaseAuth(email, pw); } catch(e) { console.warn("Auth:",e.message); }
     onLogin(u); go("dashboard");
   };
   const inp = {background:"rgba(255,255,255,.1)",border:"2px solid rgba(255,255,255,.2)",color:"#fff"};
@@ -1669,7 +1687,17 @@ function Dashboard({ user, go, logout }) {
                 if (changePw.current !== userData.password) { alert("Senha atual incorreta"); return; }
                 if (changePw.newPw.length < 6) { alert("Nova senha deve ter ao menos 6 caracteres"); return; }
                 if (changePw.newPw !== changePw.confirm) { alert("As senhas não coincidem"); return; }
+                // Atualiza no Firestore
                 await DB.updateUser(userData.id, { password: changePw.newPw });
+                // Atualiza no Firebase Auth
+                try {
+                  const currentUser = auth.currentUser;
+                  if (currentUser) {
+                    const cred = EmailAuthProvider.credential(userData.email, changePw.current);
+                    await reauthenticateWithCredential(currentUser, cred);
+                    await updatePassword(currentUser, changePw.newPw);
+                  }
+                } catch(e) { console.warn("Auth update pw:", e.message); }
                 setUserData({...userData, password: changePw.newPw});
                 setChangePw({ current:"", newPw:"", confirm:"" });
                 setShowChangePw(false);
@@ -3766,7 +3794,10 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [t, setT] = useState(null);
   const toast = (msg, type="info") => { setT({msg,type}); setTimeout(() => setT(null), 3200); };
-  const logout = () => { setUser(null); setPage("home"); toast("Até logo! 👋","info"); };
+  const logout = () => { 
+    signOut(auth).catch(() => {});
+    setUser(null); setPage("home"); toast("Até logo! 👋","info"); 
+  };
 
   useEffect(() => {
     // Load EmailJS (configure SERVICE_ID and TEMPLATE_ID at emailjs.com for email notifications)
