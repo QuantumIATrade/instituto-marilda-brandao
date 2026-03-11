@@ -88,7 +88,7 @@ a{color:var(--blue);text-decoration:none}
   .tbl{display:block;overflow-x:auto;white-space:nowrap}
   .grid-2{grid-template-columns:1fr}
   .pix-key{font-size:13px;letter-spacing:0}
-}`;
+}
 
 /* IMPACT BAR */
 .impact-bar{background:linear-gradient(135deg,var(--gold),var(--gold2));padding:40px 32px}
