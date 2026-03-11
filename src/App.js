@@ -73,8 +73,8 @@ a{color:var(--blue);text-decoration:none}
     flex-direction:column;align-items:flex-start;padding:20px;gap:4px;z-index:99;overflow-y:auto}
   .nav-mobile-menu.open{display:flex!important}
   .hero{padding:72px 16px 32px;min-height:auto}
-  .hero .container{grid-template-columns:1fr!important;gap:24px!important;text-align:center}
-  .hero .container > div:last-child{display:none}
+  .hero .container{text-align:center}
+  .hero-cards{grid-template-columns:repeat(2,1fr)!important}
   .hero-btns{justify-content:center!important}
   .section{padding:48px 16px}
   .section-title{font-size:28px}
@@ -225,17 +225,17 @@ function IMBLogo({ variant = "nav", onClick }) {
   const gold2 = "#f5c842";
   if (variant === "nav") return (
     <div onClick={onClick} style={{cursor:onClick?"pointer":"default",lineHeight:1.18,userSelect:"none"}}>
-      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:9,fontWeight:800,color:"rgba(255,255,255,.5)",letterSpacing:"4px",textTransform:"uppercase"}}>INSTITUTO</div>
+      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:10,fontWeight:800,color:"#fff",letterSpacing:"4px",textTransform:"uppercase"}}>INSTITUTO</div>
       <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:19,fontWeight:900,color:gold2,letterSpacing:"1.5px",lineHeight:1}}>MARILDA BRANDÃO</div>
-      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:8,fontWeight:700,color:"rgba(255,255,255,.35)",letterSpacing:"3px",textTransform:"uppercase",marginTop:2}}>Sempre com você</div>
+      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:9,fontWeight:800,color:"#fff",letterSpacing:"3px",textTransform:"uppercase",marginTop:2}}>Sempre com você</div>
     </div>
   );
   return (
     <div style={{textAlign:"center",userSelect:"none"}}>
-      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:11,fontWeight:800,color:gold2,letterSpacing:"6px",textTransform:"uppercase",marginBottom:6}}>INSTITUTO</div>
-      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:38,fontWeight:900,color:"#fff",letterSpacing:"3px",lineHeight:1.1,marginBottom:8}}>MARILDA<br/>BRANDÃO</div>
-      <div style={{width:40,height:2,background:`linear-gradient(90deg,transparent,${gold2},transparent)`,margin:"0 auto 10px"}}/>
-      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:9,fontWeight:700,color:"rgba(255,255,255,.5)",letterSpacing:"5px",textTransform:"uppercase"}}>Sempre com você</div>
+      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:15,fontWeight:900,color:"#fff",letterSpacing:"8px",textTransform:"uppercase",marginBottom:8}}>INSTITUTO</div>
+      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:42,fontWeight:900,color:gold2,letterSpacing:"3px",lineHeight:1.05,marginBottom:10}}>MARILDA<br/>BRANDÃO</div>
+      <div style={{width:60,height:2,background:`linear-gradient(90deg,transparent,${gold2},transparent)`,margin:"0 auto 12px"}}/>
+      <div style={{fontFamily:"'Montserrat',sans-serif",fontSize:12,fontWeight:900,color:"#fff",letterSpacing:"6px",textTransform:"uppercase"}}>Sempre com você</div>
     </div>
   );
 }
@@ -509,25 +509,25 @@ function Home({ go }) {
       </nav>
 
       {/* HERO */}
-      <section className="hero">
-        <div className="container" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:48,alignItems:"center"}}>
-          <div style={{color:"#fff"}}>
-            <IMBLogo variant="hero" />
-            <p style={{marginTop:24,fontSize:18,lineHeight:1.7,color:"rgba(255,255,255,.8)"}}>
-              Transformando vidas através da educação, inclusão e solidariedade. Cada criança merece uma oportunidade de crescer com dignidade.
-            </p>
-            <div className="hero-btns" style={{display:"flex",gap:12,marginTop:32,flexWrap:"wrap"}}>
-              <button className="btn btn-gold" onClick={() => setShowPix(true)}>💛 Fazer Doação</button>
-              <button className="btn btn-out" onClick={() => scrollTo("sobre")}>Saiba Mais</button>
-              <button className="btn btn-out" onClick={() => go("register")}>Cadastrar Família</button>
-            </div>
+      <section className="hero" style={{paddingBottom:48}}>
+        <div className="container" style={{display:"flex",flexDirection:"column",alignItems:"center",textAlign:"center",gap:0}}>
+          {/* Centered logo block */}
+          <IMBLogo variant="hero" />
+          <p style={{marginTop:24,fontSize:18,lineHeight:1.7,color:"rgba(255,255,255,.85)",maxWidth:620}}>
+            Transformando vidas através da educação, inclusão e solidariedade. Cada criança merece uma oportunidade de crescer com dignidade.
+          </p>
+          <div className="hero-btns" style={{display:"flex",gap:12,marginTop:28,flexWrap:"wrap",justifyContent:"center"}}>
+            <button className="btn btn-gold" onClick={() => setShowPix(true)}>💛 Fazer Doação</button>
+            <button className="btn btn-out" onClick={() => scrollTo("sobre")}>Saiba Mais</button>
+            <button className="btn btn-out" onClick={() => go("register")}>Cadastrar Família</button>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          {/* Cards in a horizontal row */}
+          <div className="hero-cards" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginTop:52,width:"100%"}}>
             {programs.map((p, i) => (
-              <div key={i} className="program-card" style={{animation:`float ${5+i*0.7}s ease-in-out infinite`}}>
-                <div style={{fontSize:32,marginBottom:8}}>{p.icon}</div>
-                <div style={{fontWeight:800,marginBottom:4,fontSize:15}}>{p.title}</div>
-                <div style={{fontSize:12,opacity:.8}}>{p.desc}</div>
+              <div key={i} className="program-card" style={{animation:`float ${5+i*0.7}s ease-in-out infinite`,textAlign:"left"}}>
+                <div style={{fontSize:34,marginBottom:10}}>{p.icon}</div>
+                <div style={{fontWeight:800,marginBottom:6,fontSize:15}}>{p.title}</div>
+                <div style={{fontSize:12,opacity:.8,lineHeight:1.5}}>{p.desc}</div>
               </div>
             ))}
           </div>
