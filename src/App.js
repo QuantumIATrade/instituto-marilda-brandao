@@ -21,6 +21,9 @@ a{color:var(--blue);text-decoration:none}
 .nl{background:none;color:rgba(255,255,255,.8);font-size:13px;font-weight:700;
   padding:6px 10px;border-radius:6px;transition:.2s;white-space:nowrap}
 .nl:hover{color:#fff;background:rgba(255,255,255,.12)}
+.nav-hamburger{display:none;flex-direction:column;gap:5px;cursor:pointer;padding:8px;background:none;border:none}
+.nav-hamburger span{display:block;width:22px;height:2px;background:#fff;border-radius:2px;transition:.3s}
+.nav-mobile-menu{display:none}
 
 /* BUTTONS */
 .btn{padding:10px 20px;border-radius:8px;font-weight:800;font-size:14px;transition:.2s;display:inline-flex;align-items:center;gap:6px}
@@ -63,12 +66,12 @@ a{color:var(--blue);text-decoration:none}
 /* ── MOBILE ── */
 @media(max-width:900px){
   .nav{padding:0 16px;height:56px}
-  .nav-links{display:none;position:fixed;top:56px;left:0;right:0;bottom:0;background:var(--navy);
+  .nav-desktop-links{display:none!important}
+  .nav-actions{display:none!important}
+  .nav-hamburger{display:flex!important}
+  .nav-mobile-menu{position:fixed;top:56px;left:0;right:0;bottom:0;background:var(--navy);
     flex-direction:column;align-items:flex-start;padding:20px;gap:4px;z-index:99;overflow-y:auto}
-  .nav-links.open{display:flex}
-  .nav-actions{display:none}
-  .nav-hamburger{display:flex;flex-direction:column;gap:5px;cursor:pointer;padding:8px;background:none;border:none}
-  .nav-hamburger span{display:block;width:22px;height:2px;background:#fff;border-radius:2px;transition:.3s}
+  .nav-mobile-menu.open{display:flex!important}
   .hero{padding:72px 16px 32px;min-height:auto}
   .hero .container{grid-template-columns:1fr!important;gap:24px!important;text-align:center}
   .hero .container > div:last-child{display:none}
@@ -453,27 +456,6 @@ function Home({ go }) {
   const showToast = (msg, type = "info") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3200); };
   const [donGoal] = useState(() => JSON.parse(localStorage.getItem("imb_donation_goal") || JSON.stringify({ current: 3200, target: 5000, label: "Meta de Natal 2025", currency: "R$" })));
   const scrollTo = (id) => { document.getElementById(id)?.scrollIntoView({behavior:"smooth"}); setMenuOpen(false); };
-  useEffect(() => {
-    const handleResize = () => {
-      const hamburger = document.querySelector(".nav-hamburger");
-      const desktopLinks = document.getElementById("nav-desktop");
-      const navActions = document.querySelector(".nav-actions");
-      if (!hamburger) return;
-      if (window.innerWidth <= 900) {
-        hamburger.style.display = "flex";
-        if (desktopLinks) desktopLinks.style.display = "none";
-        if (navActions) navActions.style.display = "none";
-      } else {
-        hamburger.style.display = "none";
-        setMenuOpen(false);
-        if (desktopLinks) desktopLinks.style.display = "flex";
-        if (navActions) navActions.style.display = "flex";
-      }
-    };
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
   const programs = [
     { icon: "📚", title: "Reforço Escolar", desc: "Apoio pedagógico para crianças com dificuldades de aprendizado" },
     { icon: "💻", title: "Inclusão Digital", desc: "Cursos de informática e acesso à tecnologia" },
@@ -499,23 +481,23 @@ function Home({ go }) {
       <nav className="nav">
         <IMBLogo variant="nav" />
         {/* Desktop links */}
-        <div style={{display:"flex",gap:4}} className="nav-links-desktop" id="nav-desktop">
+        <div className="nav-desktop-links" style={{display:"flex",gap:4}}>
           {[["Sobre","sobre"],["Programas","programas"],["Galeria","galeria"],["Transparência","transparencia"],["Contato","contato"]].map(([l,id]) => (
             <button key={id} className="nl" onClick={() => scrollTo(id)}>{l}</button>
           ))}
         </div>
-        <div style={{display:"flex",gap:8}} className="nav-actions">
+        <div className="nav-actions" style={{display:"flex",gap:8}}>
           <button className="btn btn-out btn-sm" onClick={() => go("login")}>Entrar</button>
           <button className="btn btn-gold btn-sm" onClick={() => go("register")}>Cadastrar-se</button>
         </div>
-        {/* Hamburger */}
-        <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)} style={{display:"none"}}>
+        {/* Hamburger button */}
+        <button className="nav-hamburger" onClick={() => setMenuOpen(!menuOpen)}>
           <span style={{transform:menuOpen?"rotate(45deg) translate(5px,5px)":"none"}}/>
           <span style={{opacity:menuOpen?0:1}}/>
           <span style={{transform:menuOpen?"rotate(-45deg) translate(5px,-5px)":"none"}}/>
         </button>
-        {/* Mobile menu */}
-        <div className={`nav-links${menuOpen?" open":""}`}>
+        {/* Mobile dropdown menu */}
+        <div className={`nav-mobile-menu${menuOpen?" open":""}`}>
           {[["Sobre","sobre"],["Programas","programas"],["Galeria","galeria"],["Transparência","transparencia"],["Contato","contato"]].map(([l,id]) => (
             <button key={id} className="nl" style={{fontSize:16,padding:"12px 8px",width:"100%",textAlign:"left"}} onClick={() => scrollTo(id)}>{l}</button>
           ))}
