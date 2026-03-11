@@ -17,9 +17,9 @@ a{color:var(--blue);text-decoration:none}
 /* NAV */
 .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:var(--navy);
   display:flex;align-items:center;justify-content:space-between;
-  padding:0 32px;height:64px;box-shadow:0 2px 20px rgba(0,0,0,.3)}
-.nl{background:none;color:rgba(255,255,255,.8);font-size:14px;font-weight:700;
-  padding:6px 12px;border-radius:6px;transition:.2s}
+  padding:0 24px;height:64px;box-shadow:0 2px 20px rgba(0,0,0,.3)}
+.nl{background:none;color:rgba(255,255,255,.8);font-size:13px;font-weight:700;
+  padding:6px 10px;border-radius:6px;transition:.2s;white-space:nowrap}
 .nl:hover{color:#fff;background:rgba(255,255,255,.12)}
 
 /* BUTTONS */
@@ -61,7 +61,7 @@ a{color:var(--blue);text-decoration:none}
 @media(max-width:600px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
 
 /* ── MOBILE ── */
-@media(max-width:768px){
+@media(max-width:900px){
   .nav{padding:0 16px;height:56px}
   .nav-links{display:none;position:fixed;top:56px;left:0;right:0;bottom:0;background:var(--navy);
     flex-direction:column;align-items:flex-start;padding:20px;gap:4px;z-index:99;overflow-y:auto}
@@ -459,7 +459,7 @@ function Home({ go }) {
       const desktopLinks = document.getElementById("nav-desktop");
       const navActions = document.querySelector(".nav-actions");
       if (!hamburger) return;
-      if (window.innerWidth <= 768) {
+      if (window.innerWidth <= 900) {
         hamburger.style.display = "flex";
         if (desktopLinks) desktopLinks.style.display = "none";
         if (navActions) navActions.style.display = "none";
@@ -1416,7 +1416,7 @@ function Admin({ go, logout, toast }) {
       </div>
 
       <div className="admin-content" style={{paddingTop:"env(safe-area-inset-top)"}}>
-        <style>{`@media(max-width:768px){.admin-content{padding-top:72px!important}}`}</style>
+        <style>{`@media(max-width:900px){.admin-content{padding-top:72px!important}}`}</style>
         {/* ── CADASTROS ── */}
         {tab==="cadastros" && (
           <div className="fade-in">
