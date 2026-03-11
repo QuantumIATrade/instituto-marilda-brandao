@@ -17,17 +17,7 @@ const db = getFirestore(fbApp);
 const auth = getAuth(fbApp);
 
 // Helper: garante que o usuário existe no Firebase Auth (migração silenciosa)
-const ensureFirebaseAuth = async (email, password) => {
-  try {
-    return await signInWithEmailAndPassword(auth, email, password);
-  } catch(e) {
-    if (e.code === "auth/user-not-found" || e.code === "auth/invalid-credential") {
-      // Primeiro login: cria a conta no Firebase Auth
-      return await createUserWithEmailAndPassword(auth, email, password);
-    }
-    throw e;
-  }
-};
+
 
 // ── Upload de documentos via Cloudinary (pasta privada por userId)
 const uploadDocumento = async (userId, tipo, file, onProgress) => {
