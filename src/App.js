@@ -1175,12 +1175,22 @@ function Register({ go, toast }) {
 
       // Save user WITHOUT document URLs (only metadata)
       // Cria conta no Firebase Auth PRIMEIRO
-      try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth registro:", e.message); }
-      // Salva no Firestore SEM a senha
+      let authUid = null;
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, f.email, f.password);
+        authUid = cred.user.uid;
+      } catch(e) {
+        if (e.code === "auth/email-already-in-use") {
+          // já existe, pega o uid do login
+          try { const c2 = await signInWithEmailAndPassword(auth, f.email, f.password); authUid = c2.user.uid; } catch(_) {}
+        } else { console.warn("Auth registro:", e.message); }
+      }
+      // Salva no Firestore SEM a senha, COM o authUid
       const { confirm, password, ...userData } = f;
       const newUser = {
         ...userData,
         id: userId,
+        authUid,
         status: "pending",
         createdAt: new Date().toLocaleString("pt-BR"),
         qrCodes: {},
@@ -1468,6 +1478,11 @@ function Login({ go, onLogin, toast }) {
       if (!u) { toast("Usuário não encontrado","error"); return; }
       if (u.status==="pending") { toast("Cadastro aguardando aprovação","error"); return; }
       if (u.status==="rejected") { toast("Cadastro não aprovado. Entre em contato.","error"); return; }
+      // Migração silenciosa: salva authUid se ainda não tiver
+      if (!u.authUid && fbUser?.user?.uid) {
+        await DB.updateUser(u.id, { authUid: fbUser.user.uid });
+        u.authUid = fbUser.user.uid;
+      }
       onLogin(u); go("dashboard");
 
     } catch(e) {
