@@ -202,8 +202,8 @@ a{color:var(--blue);text-decoration:none}
   .footer{padding:32px 16px 20px}
   .modal{padding:20px;border-radius:16px}
   .dash-header{padding:20px 16px}
-  .sidebar{transform:translateX(-100%);transition:.3s;z-index:200}
-  .sidebar.open{transform:translateX(0)}
+  .sidebar{transform:translateX(-100%);transition:.3s;z-index:200;display:none!important}
+  .sidebar.open{transform:translateX(0);display:none!important}
   .admin-content{margin-left:0!important;padding:16px;padding-top:120px!important}
   .admin-topbar{display:flex!important}
   .admin-mobile-tabs{display:flex!important}
@@ -2524,20 +2524,15 @@ function Admin({ go, logout, toast, adminUser }) {
   const tabs = allTabs.filter(([id]) => hasPermission(id));
 
   // Set default tab to first allowed
-  React.useEffect(() => {
+  useEffect(() => {
     if (!tab && tabs.length > 0) setTab(tabs[0][0]);
-  }, [tabs.length]);
+  }, [tabs.length]); // eslint-disable-line
 
   return (
     <>
       <style>{CSS}</style>
       {/* Mobile topbar */}
       <div className="admin-topbar" style={{display:"none",position:"fixed",top:0,left:0,right:0,height:56,background:"var(--navy)",zIndex:150,alignItems:"center",padding:"0 16px",gap:12,boxShadow:"0 2px 12px rgba(0,0,0,.3)"}}>
-        <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{background:"none",display:"flex",flexDirection:"column",gap:5,padding:4}}>
-          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
-          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
-          <span style={{display:"block",width:22,height:2,background:"#fff",borderRadius:2}}/>
-        </button>
         <IMBLogo variant="nav" />
       </div>
       {/* Sidebar overlay on mobile */}
