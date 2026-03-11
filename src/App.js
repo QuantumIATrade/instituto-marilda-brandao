@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "firebase/firestore";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, updateEmail, EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
+import { getFirestore, collection, doc, getDocs, getDoc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, runTransaction } from "firebase/firestore";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, updatePassword, updateEmail, EmailAuthProvider, reauthenticateWithCredential, signInAnonymously, setPersistence, browserSessionPersistence } from "firebase/auth";
 
 // ─── FIREBASE ────────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -15,6 +15,8 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
 const auth = getAuth(fbApp);
+// FIX #14: token expira quando o browser fecha (não fica no localStorage)
+setPersistence(auth, browserSessionPersistence).catch(() => {});
 
 // Helper: garante que o usuário existe no Firebase Auth (migração silenciosa)
 
@@ -51,27 +53,29 @@ const uploadDocumento = async (userId, tipo, file, onProgress) => {
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutos
 
-// Cache local para evitar excesso de leituras no Firestore
-const _bfCache = {};
-
 const _bfDoc = (email) => doc(db, "security", `bf_${email.toLowerCase().replace(/[^a-z0-9]/g,"_")}`);
 
+// Garante que há uma sessão Firebase (anônima se não logado) para acessar o Firestore
+const ensureAuth = async () => {
+  if (!auth.currentUser) {
+    try { await signInAnonymously(auth); } catch(e) { console.warn("Anon auth:", e.message); }
+  }
+};
+
 const checkBruteForce = async (email) => {
-  const key = email.toLowerCase();
-  const now = Date.now();
   try {
+    await ensureAuth();
     const d = await getDoc(_bfDoc(email));
     if (!d.exists()) return { blocked: false };
     const rec = d.data();
-    if (now - rec.firstAt > LOCKOUT_MS) {
-      await deleteDoc(_bfDoc(email)); // limpa registro expirado
+    if (Date.now() - rec.firstAt > LOCKOUT_MS) {
+      await deleteDoc(_bfDoc(email));
       return { blocked: false };
     }
     if (rec.count >= MAX_ATTEMPTS) {
-      const remaining = Math.ceil((LOCKOUT_MS - (now - rec.firstAt)) / 60000);
+      const remaining = Math.ceil((LOCKOUT_MS - (Date.now() - rec.firstAt)) / 60000);
       return { blocked: true, remaining };
     }
-    _bfCache[key] = rec;
     return { blocked: false };
   } catch(e) { return { blocked: false }; }
 };
@@ -79,6 +83,7 @@ const checkBruteForce = async (email) => {
 const registerFailedAttempt = async (email) => {
   const now = Date.now();
   try {
+    await ensureAuth();
     const d = await getDoc(_bfDoc(email));
     if (!d.exists() || (now - d.data().firstAt > LOCKOUT_MS)) {
       await setDoc(_bfDoc(email), { count: 1, firstAt: now });
@@ -91,7 +96,17 @@ const registerFailedAttempt = async (email) => {
 const clearAttempts = async (email) => {
   try { await deleteDoc(_bfDoc(email)); } catch(e) {}
 };
+// Sanitiza URLs externas — bloqueia javascript:, data:, vbscript:
+const safeUrl = (url) => {
+  if (!url) return "";
+  const u = String(url).trim();
+  if (/^(javascript|data|vbscript):/i.test(u)) return "";
+  if (!/^https?:\/\//i.test(u)) return "";
+  return u;
+};
+
 const DB = {
+  async getUser(id) { const d = await getDoc(doc(db,"users",id)); return d.exists()?{...d.data(),id:d.id}:null; },
   async getUsers() { const s = await getDocs(collection(db,"users")); return s.docs.map(d=>({...d.data(),id:d.id})); },
   async saveUser(u) { const {id,...data}=u; await setDoc(doc(db,"users",id),data); },
   async updateUser(id,data) { await updateDoc(doc(db,"users",id),data); },
@@ -625,7 +640,7 @@ function VolunteerModal({ onClose, toast }) {
         </div>
         <div className="form-group">
           <label className="form-label">Mensagem (opcional)</label>
-          <textarea className="form-input" rows={3} value={form.message} onChange={e => setForm({...form,message:e.target.value})} placeholder="Conte um pouco sobre você e sua experiência..." />
+          <textarea className="form-input" rows={3} value={form.message} onChange={e =maxLength={1000}> setForm({...form,message:e.target.value})} placeholder="Conte um pouco sobre você e sua experiência..." />
         </div>
         <div style={{display:"flex",gap:12}}>
           <button className="btn btn-gold" style={{flex:1,justifyContent:"center"}} onClick={handleSubmit}>Enviar Inscrição</button>
@@ -1060,8 +1075,8 @@ function Home({ go }) {
               <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                 <button className="btn btn-gold" onClick={() => setShowPix(true)}>💛 Fazer Doação</button>
                 <button className="btn btn-blue" onClick={() => setShowVol(true)}>🤝 Ser Voluntário</button>
-                {siteText.contato_instagram && <a href={siteText.contato_instagram} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)",color:"#fff",textDecoration:"none"}}>📸 Instagram</a>}
-                {siteText.contato_facebook && <a href={siteText.contato_facebook} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"#1877f2",color:"#fff",textDecoration:"none"}}>👍 Facebook</a>}
+                {safeUrl(siteText.contato_instagram) && <a href={safeUrl(siteText.contato_instagram)} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)",color:"#fff",textDecoration:"none"}}>📸 Instagram</a>}
+                {safeUrl(siteText.contato_facebook) && <a href={safeUrl(siteText.contato_facebook)} target="_blank" rel="noopener noreferrer" className="btn" style={{background:"#1877f2",color:"#fff",textDecoration:"none"}}>👍 Facebook</a>}
               </div>
             </div>
             <div>
@@ -1141,6 +1156,11 @@ function Register({ go, toast }) {
 
   const handleFileSelect = (key, file) => {
     if (!file) return;
+    // FIX #11: valida MIME type real (não apenas extensão)
+    const ALLOWED_MIME = ["image/jpeg","image/png","image/gif","image/webp","application/pdf"];
+    if (!ALLOWED_MIME.includes(file.type)) {
+      toast(`${key.toUpperCase()}: tipo de arquivo não permitido. Use imagem (JPG, PNG, WebP) ou PDF`,"error"); return;
+    }
     if (file.size > 8 * 1024 * 1024) { toast(`${key.toUpperCase()}: arquivo muito grande (máx 8MB)`,"error"); return; }
     setDocs(prev => ({...prev, [key]: file}));
   };
@@ -1200,10 +1220,11 @@ function Register({ go, toast }) {
           try { const c2 = await signInWithEmailAndPassword(auth, f.email, f.password); authUid = c2.user.uid; } catch(_) {}
         } else { console.warn("Auth registro:", e.message); }
       }
-      // Salva no Firestore SEM a senha, COM o authUid
-      const { confirm, password, ...userData } = f;
+      // Salva no Firestore — apenas campos da whitelist (previne mass assignment)
+      const ALLOWED_FIELDS = ["name","email","cpf","phone","birthdate","address","neighborhood","city","state","children","childrenNames","reason","howKnew"];
+      const safeData = Object.fromEntries(ALLOWED_FIELDS.filter(k => f[k] !== undefined).map(k => [k, String(f[k]||"").slice(0, 500)]));
       const newUser = {
-        ...userData,
+        ...safeData,
         id: userId,
         authUid,
         status: "pending",
@@ -1275,16 +1296,16 @@ function Register({ go, toast }) {
                   {[["name","Nome Completo *","text"],["email","E-mail *","email"],["cpf","CPF","text"],["phone","Telefone / WhatsApp","text"],["birthdate","Data de Nascimento","date"],["address","Endereço Completo","text"]].map(([k,l,t]) => (
                     <div key={k} className="form-group" style={k==="address"?{gridColumn:"1/-1"}:{}}>
                       <label className="form-label">{l}</label>
-                      <input className="form-input" type={t} value={f[k]} onChange={set(k)} />
+                      <input className="form-input" type={t} value={f[k]} onChange={set(k)} maxLength={200} />
                     </div>
                   ))}
                   <div className="form-group">
                     <label className="form-label">Cidade</label>
-                    <input className="form-input" value={f.city} onChange={set("city")} />
+                    <input className="form-input" value={f.city} onChange={set("city")} maxLength={200} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Bairro</label>
-                    <input className="form-input" value={f.neighborhood} onChange={set("neighborhood")} placeholder="Ex: Centro, Vila Nova..." />
+                    <input className="form-input" value={f.neighborhood} onChange={set("neighborhood")} placeholder="Ex: Centro, Vila Nova..." maxLength={200} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Estado</label>
@@ -1295,11 +1316,11 @@ function Register({ go, toast }) {
                   </div>
                   <div className="form-group">
                     <label className="form-label">Nº de crianças</label>
-                    <input className="form-input" type="number" min="0" max="20" value={f.children} onChange={set("children")} />
+                    <input className="form-input" type="number" min="0" max="20" value={f.children} onChange={set("children")} maxLength={200} />
                   </div>
                   <div className="form-group" style={{gridColumn:"1/-1"}}>
                     <label className="form-label">Nome das crianças (idades)</label>
-                    <input className="form-input" value={f.childrenNames} onChange={set("childrenNames")} placeholder="Ex: Ana (8), Pedro (12)" />
+                    <input className="form-input" value={f.childrenNames} onChange={set("childrenNames")} placeholder="Ex: Ana (8), Pedro (12)" maxLength={200} />
                   </div>
                   <div className="form-group" style={{gridColumn:"1/-1"}}>
                     <label className="form-label">Como conheceu o Instituto?</label>
@@ -1310,15 +1331,15 @@ function Register({ go, toast }) {
                   </div>
                   <div className="form-group" style={{gridColumn:"1/-1"}}>
                     <label className="form-label">Por que busca atendimento?</label>
-                    <textarea className="form-input" rows={3} value={f.reason} onChange={set("reason")} placeholder="Descreva brevemente sua situação..." />
+                    <textarea className="form-input" rows={3} value={f.reason} onChange={set("reason")} placeholder="Descreva brevemente sua situação..." maxLength={1000} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Senha *</label>
-                    <input className="form-input" type="password" value={f.password} onChange={set("password")} />
+                    <input className="form-input" type="password" value={f.password} onChange={set("password")} maxLength={128} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Confirmar Senha *</label>
-                    <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} />
+                    <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} maxLength={128} />
                   </div>
                 </div>
                 <div style={{display:"flex",gap:12,marginTop:8}}>
@@ -1649,8 +1670,8 @@ function Dashboard({ user, go, logout }) {
   useEffect(() => {
     DB.getEvents().then(evs => setEvents(evs));
     DB.getAnnouncements().then(anns => setAnnouncements(anns.filter(a => !a.expiresAt || new Date(a.expiresAt) >= new Date())));
-    DB.getUsers().then(users => {
-      const fresh = users.find(u => u.email === user.email);
+    // FIX #10: busca apenas o próprio documento, não todos os usuários
+    DB.getUser(user.id).then(fresh => {
       if (fresh) setUserData(fresh);
     });
   }, [user.email]);
@@ -1850,7 +1871,8 @@ function CollaboratorRegister({ go, toast }) {
     // Cria no Firebase Auth primeiro
     try { await createUserWithEmailAndPassword(auth, f.email, f.password); } catch(e) { console.warn("Auth collab:", e.message); }
     // Salva no Firestore SEM senha
-    const { confirm, password, ...colData } = f;
+    const COL_ALLOWED = ["name","email","phone","role"];
+    const colData = Object.fromEntries(COL_ALLOWED.filter(k => f[k] !== undefined).map(k => [k, String(f[k]||"").slice(0,300)]));
     const newCol = { ...colData, id:`C${Date.now()}`, status:"pending", createdAt:new Date().toLocaleString("pt-BR") };
     await DB.saveCollaborator(newCol);
     toast("✓ Solicitação enviada! Aguarde aprovação do administrador.","success");
@@ -1869,16 +1891,16 @@ function CollaboratorRegister({ go, toast }) {
             <p style={{color:"var(--gray)",fontSize:14,marginBottom:24}}>Preencha seus dados para solicitar acesso como colaborador do Instituto</p>
             <div className="form-group">
               <label className="form-label">Nome Completo *</label>
-              <input className="form-input" value={f.name} onChange={set("name")} placeholder="Seu nome completo" />
+              <input className="form-input" value={f.name} onChange={set("name")} placeholder="Seu nome completo" maxLength={200} />
             </div>
             <div className="grid-2">
               <div className="form-group">
                 <label className="form-label">E-mail *</label>
-                <input className="form-input" type="email" value={f.email} onChange={set("email")} placeholder="seu@email.com" />
+                <input className="form-input" type="email" value={f.email} onChange={set("email")} placeholder="seu@email.com" maxLength={200} />
               </div>
               <div className="form-group">
                 <label className="form-label">Telefone / WhatsApp</label>
-                <input className="form-input" value={f.phone} onChange={set("phone")} placeholder="(00) 00000-0000" />
+                <input className="form-input" value={f.phone} onChange={set("phone")} placeholder="(00) 00000-0000" maxLength={200} />
               </div>
             </div>
             <div className="form-group">
@@ -1892,11 +1914,11 @@ function CollaboratorRegister({ go, toast }) {
             <div className="grid-2">
               <div className="form-group">
                 <label className="form-label">Senha *</label>
-                <input className="form-input" type="password" value={f.password} onChange={set("password")} placeholder="Crie uma senha" />
+                <input className="form-input" type="password" value={f.password} onChange={set("password")} placeholder="Crie uma senha" maxLength={128} />
               </div>
               <div className="form-group">
                 <label className="form-label">Confirmar Senha *</label>
-                <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} placeholder="Repita a senha" />
+                <input className="form-input" type="password" value={f.confirm} onChange={set("confirm")} placeholder="Repita a senha" maxLength={128} />
               </div>
             </div>
             <div style={{background:"var(--sky)",borderRadius:10,padding:14,marginBottom:20,fontSize:13,color:"var(--navy)"}}>
@@ -1935,8 +1957,8 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
     if (parts.length < 4) { setQrResult({ ok:false, msg:"Formato inválido" }); return; }
     const eventId = parts[1].toLowerCase();
     const userId = parts[2];
-    const allUsers = await DB.getUsers();
-    const u = allUsers.find(u => u.id===userId);
+    // FIX #6: busca apenas o usuário específico, não todos
+    const u = await DB.getUser(userId);
     if (!u) { setQrResult({ ok:false, msg:"Usuário não encontrado" }); return; }
     if (u.qrCodes?.[eventId] !== code) { setQrResult({ ok:false, msg:"QR Code não corresponde" }); return; }
     if (u.usedQrCodes?.[eventId]) { setQrResult({ ok:false, msg:`Já utilizado em ${u.usedQrCodes[eventId]}`, user:u }); return; }
@@ -1947,13 +1969,28 @@ function CollaboratorDashboard({ user, go, logout, toast }) {
   const confirmDelivery = async () => {
     if (!qrResult?.ok) return;
     const ts = new Date().toLocaleString("pt-BR");
-    const newUsedQr = { ...(qrResult.user.usedQrCodes||{}), [qrResult.eventId]: ts };
-    await DB.updateUser(qrResult.user.id, { usedQrCodes: newUsedQr });
-    const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts, validatedBy:user.name };
-    await DB.saveQrHistory(histEntry);
-    setHistory(prev => [...prev, histEntry]);
-    toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
-    setQrResult(null); setQrInput("");
+    const userDocRef = doc(db, "users", qrResult.user.id);
+    try {
+      // Transação atômica — previne dupla entrega em race condition
+      await runTransaction(db, async (transaction) => {
+        const freshDoc = await transaction.get(userDocRef);
+        if (!freshDoc.exists()) throw new Error("Usuário não encontrado");
+        const freshData = freshDoc.data();
+        // Verifica novamente dentro da transação
+        if (freshData.usedQrCodes?.[qrResult.eventId]) {
+          throw new Error(`QR já utilizado em ${freshData.usedQrCodes[qrResult.eventId]}`);
+        }
+        const newUsedQr = { ...(freshData.usedQrCodes||{}), [qrResult.eventId]: ts };
+        transaction.update(userDocRef, { usedQrCodes: newUsedQr });
+      });
+      const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts, validatedBy:user.name };
+      await DB.saveQrHistory(histEntry);
+      setHistory(prev => [...prev, histEntry]);
+      toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
+      setQrResult(null); setQrInput("");
+    } catch(e) {
+      toast("❌ " + e.message, "error");
+    }
   };
 
   const scanningRef = useRef(false);
@@ -2274,11 +2311,11 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Parágrafo 1 — História / Origem</label>
-                <textarea style={textareaStyle} value={siteText.sobre_texto1||""} onChange={e=>setSiteText({...siteText,sobre_texto1:e.target.value})} placeholder="Conte a história do Instituto..." />
+                <textarea style={textareaStyle} value={siteText.sobre_texto1||""} onChange={e=maxLength={1000}>setSiteText({...siteText,sobre_texto1:e.target.value})} placeholder="Conte a história do Instituto..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Parágrafo 2 — Missão / Valores</label>
-                <textarea style={textareaStyle} value={siteText.sobre_texto2||""} onChange={e=>setSiteText({...siteText,sobre_texto2:e.target.value})} placeholder="Descreva a missão e valores..." />
+                <textarea style={textareaStyle} value={siteText.sobre_texto2||""} onChange={e=maxLength={1000}>setSiteText({...siteText,sobre_texto2:e.target.value})} placeholder="Descreva a missão e valores..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">URL da Foto (seção Sobre)</label>
@@ -2301,11 +2338,11 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Texto descritivo ao lado do vídeo</label>
-                <textarea style={textareaStyle} value={siteText.video_texto||""} onChange={e=>setSiteText({...siteText,video_texto:e.target.value})} placeholder="Texto que aparece ao lado do vídeo..." />
+                <textarea style={textareaStyle} value={siteText.video_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,video_texto:e.target.value})} placeholder="Texto que aparece ao lado do vídeo..." />
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Itens de destaque (um por linha)</label>
-                <textarea style={{...textareaStyle,minHeight:80}} value={siteText.video_itens||""} onChange={e=>setSiteText({...siteText,video_itens:e.target.value})} placeholder={"Mais de 10 anos de história\nAtuação em comunidades vulneráveis\nProjetos reconhecidos pelo poder público"} />
+                <textarea style={{...textareaStyle,minHeight:80}} value={siteText.video_itens||""} onChange={e=maxLength={1000}>setSiteText({...siteText,video_itens:e.target.value})} placeholder={"Mais de 10 anos de história\nAtuação em comunidades vulneráveis\nProjetos reconhecidos pelo poder público"} />
                 <div style={{fontSize:11,color:"#94a3b8",marginTop:4}}>Cada linha vira um item com ✓ na lista</div>
               </div>
             </div>
@@ -2324,7 +2361,7 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Texto de compromisso de transparência</label>
-                <textarea style={textareaStyle} value={siteText.transparencia_texto||""} onChange={e=>setSiteText({...siteText,transparencia_texto:e.target.value})} placeholder="🔒 Compromisso de Transparência: ..." />
+                <textarea style={textareaStyle} value={siteText.transparencia_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,transparencia_texto:e.target.value})} placeholder="🔒 Compromisso de Transparência: ..." />
               </div>
             </div>
           </div>
@@ -2353,7 +2390,7 @@ function TabConteudo({ toast }) {
               </div>
               <div className="form-group" style={{gridColumn:"1/-1"}}>
                 <label className="form-label">Depoimento *</label>
-                <textarea style={textareaStyle} value={depForm.text} onChange={e=>setDepForm({...depForm,text:e.target.value})} placeholder="Digite o depoimento..." />
+                <textarea style={textareaStyle} value={depForm.text} onChange={e=maxLength={1000}>setDepForm({...depForm,text:e.target.value})} placeholder="Digite o depoimento..." />
               </div>
               <div className="form-group">
                 <label className="form-label">Emoji Avatar (se não tiver foto)</label>
@@ -2526,7 +2563,7 @@ function TabConteudo({ toast }) {
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
               <div className="form-group">
                 <label className="form-label">Texto descritivo no rodapé</label>
-                <textarea style={textareaStyle} value={siteText.footer_texto||""} onChange={e=>setSiteText({...siteText,footer_texto:e.target.value})} placeholder="Breve descrição do Instituto para o rodapé..." />
+                <textarea style={textareaStyle} value={siteText.footer_texto||""} onChange={e=maxLength={1000}>setSiteText({...siteText,footer_texto:e.target.value})} placeholder="Breve descrição do Instituto para o rodapé..." />
               </div>
               <div className="form-group">
                 <label className="form-label">Texto de direitos / copyright</label>
@@ -2708,8 +2745,8 @@ function Admin({ go, logout, toast, adminUser }) {
     if (parts.length < 4) { setQrResult({ ok:false, msg:"Formato inválido" }); return; }
     const eventId = parts[1].toLowerCase();
     const userId = parts[2];
-    const allUsers = await DB.getUsers();
-    const u = allUsers.find(u => u.id===userId);
+    // FIX #6: busca apenas o usuário específico
+    const u = await DB.getUser(userId);
     if (!u) { setQrResult({ ok:false, msg:"Usuário não encontrado" }); return; }
     if (u.qrCodes?.[eventId] !== code) { setQrResult({ ok:false, msg:"QR Code não corresponde" }); return; }
     if (u.usedQrCodes?.[eventId]) { setQrResult({ ok:false, msg:`Já utilizado em ${u.usedQrCodes[eventId]}`, user:u }); return; }
@@ -2720,14 +2757,30 @@ function Admin({ go, logout, toast, adminUser }) {
   const confirmDelivery = async () => {
     if (!qrResult?.ok) return;
     const ts = new Date().toLocaleString("pt-BR");
-    const newUsedQr = { ...(qrResult.user.usedQrCodes||{}), [qrResult.eventId]: ts };
-    await DB.updateUser(qrResult.user.id, { usedQrCodes: newUsedQr });
-    setUsers(prev => prev.map(u => u.id===qrResult.user.id ? { ...u, usedQrCodes: newUsedQr } : u));
-    const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts };
-    await DB.saveQrHistory(histEntry);
-    setQrHistory(prev => [...prev, histEntry]);
-    toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
-    setQrResult(null); setQrInput("");
+    const userDocRef = doc(db, "users", qrResult.user.id);
+    try {
+      // Transação atômica — previne dupla entrega em race condition
+      await runTransaction(db, async (transaction) => {
+        const freshDoc = await transaction.get(userDocRef);
+        if (!freshDoc.exists()) throw new Error("Usuário não encontrado");
+        const freshData = freshDoc.data();
+        if (freshData.usedQrCodes?.[qrResult.eventId]) {
+          throw new Error(`QR já utilizado em ${freshData.usedQrCodes[qrResult.eventId]}`);
+        }
+        const newUsedQr = { ...(freshData.usedQrCodes||{}), [qrResult.eventId]: ts };
+        transaction.update(userDocRef, { usedQrCodes: newUsedQr });
+      });
+      const newUsedQr = { ...(qrResult.user.usedQrCodes||{}), [qrResult.eventId]: ts };
+      setUsers(prev => prev.map(u => u.id===qrResult.user.id ? { ...u, usedQrCodes: newUsedQr } : u));
+      const histEntry = { code:qrResult.code, userName:qrResult.user.name, eventLabel:qrResult.event?.label||qrResult.eventId, ts };
+      await DB.saveQrHistory(histEntry);
+      setQrHistory(prev => [...prev, histEntry]);
+      toast(`✅ Entrega confirmada para ${qrResult.user.name}!`, "success");
+      setQrResult(null); setQrInput("");
+    } catch(e) {
+      toast("❌ " + e.message, "error");
+    }
+  };
   };
 
   // Camera QR scanning
@@ -3260,7 +3313,9 @@ function Admin({ go, logout, toast, adminUser }) {
               </div>
               <button className="btn btn-gold" onClick={async () => {
                 if (!newDonation.donor||!newDonation.amount) { toast("Preencha doador e valor","error"); return; }
-                const entry = { ...newDonation, id:`D${Date.now()}`, registeredAt:new Date().toLocaleString("pt-BR") };
+                const parsedAmount = parseFloat(String(newDonation.amount).replace(",","."));
+                if (isNaN(parsedAmount) || parsedAmount <= 0) { toast("Valor da doação inválido","error"); return; }
+                const entry = { ...newDonation, amount: parsedAmount, id:`D${Date.now()}`, registeredAt:new Date().toLocaleString("pt-BR") };
                 await DB.saveDonation(entry);
                 setDonations(prev => [...prev, entry]);
                 setNewDonation({ donor:"",amount:"",method:"PIX",date:"",note:"" });
@@ -3305,7 +3360,7 @@ function Admin({ go, logout, toast, adminUser }) {
               <div className="form-group"><label className="form-label">Título *</label>
                 <input className="form-input" value={newAnnouncement.title} onChange={e=>setNewAnnouncement({...newAnnouncement,title:e.target.value})} placeholder="Ex: Distribuição de cestas em 15/01" /></div>
               <div className="form-group"><label className="form-label">Mensagem *</label>
-                <textarea className="form-input" rows={3} value={newAnnouncement.body} onChange={e=>setNewAnnouncement({...newAnnouncement,body:e.target.value})} placeholder="Detalhes do aviso..." style={{resize:"vertical"}} /></div>
+                <textarea className="form-input" rows={3} value={newAnnouncement.body} onChange={e=maxLength={1000}>setNewAnnouncement({...newAnnouncement,body:e.target.value})} placeholder="Detalhes do aviso..." style={{resize:"vertical"}} /></div>
               <div className="grid-2">
                 <div className="form-group"><label className="form-label">Prioridade</label>
                   <select className="form-select" value={newAnnouncement.priority} onChange={e=>setNewAnnouncement({...newAnnouncement,priority:e.target.value})}>
@@ -3891,7 +3946,15 @@ function Admin({ go, logout, toast, adminUser }) {
                         <button className="btn btn-sm" style={{background:"#e0e7ff",color:"#3730a3"}}
                           onClick={()=>setEditingAdmin({...adm})}>✏️</button>
                         <button className="btn btn-sm btn-red"
-                          onClick={async()=>{ if(window.confirm("Excluir este administrador?")){ await DB.deleteAdmin(adm.id); setAdmins(await DB.getAdmins()); toast("Admin removido","success"); } }}>🗑️</button>
+                          onClick={async()=>{
+                            if(window.confirm("Excluir este administrador? Ele perderá o acesso imediatamente.")){
+                              await DB.deleteAdmin(adm.id);
+                              // Envia reset de senha para invalidar a conta no Firebase Auth
+                              try { await sendPasswordResetEmail(auth, adm.email); } catch(e) {}
+                              setAdmins(await DB.getAdmins());
+                              toast("Admin removido","success");
+                            }
+                          }}>🗑️</button>
                       </div>
                     </div>
                   ))}
